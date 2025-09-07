@@ -1,0 +1,48 @@
+# 测试目录
+/test_dir/
+/test_files/
+/test_incremental_dir/
+/test_large_dir/
+/test_parallel_dir/
+
+# 测试文件
+/test_*.py
+/test_*.sh
+/test_*.log
+/test_*.txt
+/test_*.new
+/test_*.checksum
+/test_snapshot*
+/src/test_*.py
+/testfiles/
+/tests/
+
+# 临时文件和目录
+/temp/
+/data/snapshots/
+/output/
+/backups/
+/src/output/
+/src/snapshots/
+*.log
+*.tmp
+*.temp
+/tmp_venv/
+
+# Docker相关
+/.dockerenv
+/docker-compose.yml
+/Dockerfile
+
+# 配置文件
+/config.env
+/data/config.env
+/test_config.env
+
+# IDE相关
+/.idea/
+/.vscode/
+*.swp
+*.swo
+
+.DS_Store

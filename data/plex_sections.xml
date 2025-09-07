@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer size="12" allowSync="0" title1="Plex Library">
+<Directory allowSync="1" filters="1" refreshing="0" key="1" type="movie" title="&#20013;&#22269;&#30005;&#24433;" agent="tv.plex.agents.movie" scanner="Plex Movie" language="zh-CN" uuid="c80f5792-e17f-4046-9b8a-c157d8bc0eed" updatedAt="1754731666" createdAt="1753000168" scannedAt="1754657502" content="1" directory="1" contentChangedAt="53959" hidden="0">
+<Location id="1" path="/vol02/CloudDrive/WebDAV/&#30005;&#24433;/&#20013;&#22269;&#30005;&#24433;" />
+<Location id="2" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#24433;/&#20013;&#22269;&#30005;&#24433;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="7" type="movie" title="&#22269;&#20135;&#21160;&#30011;" agent="tv.plex.agents.movie" scanner="Plex Movie" language="zh-CN" uuid="e5141786-2bcd-4eff-822e-87e96e58a197" updatedAt="1754707923" createdAt="1753001215" scannedAt="1754700259" content="1" directory="1" contentChangedAt="60579" hidden="0">
+<Location id="13" path="/vol02/CloudDrive/WebDAV/&#30005;&#24433;/&#21160;&#30011;&#30005;&#24433;/&#22269;&#20135;&#21160;&#30011;" />
+<Location id="14" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#24433;/&#22269;&#20135;&#21160;&#30011;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="9" type="movie" title="&#26085;&#38889;&#21160;&#30011;" agent="tv.plex.agents.movie" scanner="Plex Movie" language="zh-CN" uuid="cf9f8258-8c57-49ee-807e-4302b1326d73" updatedAt="1754707993" createdAt="1753002328" scannedAt="1754699586" content="1" directory="1" contentChangedAt="56107" hidden="0">
+<Location id="17" path="/vol02/CloudDrive/WebDAV/&#30005;&#24433;/&#21160;&#30011;&#30005;&#24433;/&#26085;&#38889;&#21160;&#30011;" />
+<Location id="18" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#24433;/&#26085;&#38889;&#21160;&#30011;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="3" type="movie" title="&#26085;&#38889;&#30005;&#24433;" agent="tv.plex.agents.movie" scanner="Plex Movie" language="zh-CN" uuid="dcd20286-81ab-4085-a2ef-bc3fd5ff2228" updatedAt="1754734042" createdAt="1753000325" scannedAt="1753274357" content="1" directory="1" contentChangedAt="56016" hidden="0">
+<Location id="5" path="/vol02/CloudDrive/WebDAV/&#30005;&#24433;/&#26085;&#38889;&#30005;&#24433;" />
+<Location id="6" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#24433;/&#26085;&#38889;&#30005;&#24433;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="8" type="movie" title="&#27431;&#32654;&#21160;&#30011;" agent="tv.plex.agents.movie" scanner="Plex Movie" language="zh-CN" uuid="b3e7d07c-78c4-4b89-b2db-6c26d07d3971" updatedAt="1754708167" createdAt="1753002205" scannedAt="1754657362" content="1" directory="1" contentChangedAt="45974" hidden="0">
+<Location id="15" path="/vol02/CloudDrive/WebDAV/&#30005;&#24433;/&#21160;&#30011;&#30005;&#24433;/&#27431;&#32654;&#21160;&#30011;" />
+<Location id="16" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#24433;/&#27431;&#32654;&#21160;&#30011;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="2" type="movie" title="&#27431;&#32654;&#30005;&#24433;" agent="tv.plex.agents.movie" scanner="Plex Movie" language="zh-CN" uuid="d915b845-ebe9-41dd-86c6-07eef751e5fc" updatedAt="1754733664" createdAt="1753000264" scannedAt="1754657761" content="1" directory="1" contentChangedAt="62667" hidden="0">
+<Location id="3" path="/vol02/CloudDrive/WebDAV/&#30005;&#24433;/&#27431;&#32654;&#30005;&#24433;" />
+<Location id="4" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#24433;/&#27431;&#32654;&#30005;&#24433;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="10" type="show" title="&#21160;&#30011;&#29255;" agent="tv.plex.agents.series" scanner="Plex TV Series" language="zh-CN" uuid="7f7b403f-2b27-4359-8e5a-042d6c268230" updatedAt="1753361538" createdAt="1753002616" scannedAt="1753506432" content="1" directory="1" contentChangedAt="58343" hidden="0">
+<Location id="27" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#35270;&#21095;/&#21160;&#30011;&#29255;" />
+<Location id="19" path="/vol02/CloudDrive/WebDAV/&#30005;&#35270;&#21095;/&#21160;&#30011;&#29255;/&#20013;&#22269;&#21160;&#30011;" />
+<Location id="20" path="/vol02/CloudDrive/WebDAV/&#30005;&#35270;&#21095;/&#21160;&#30011;&#29255;/&#27431;&#32654;&#21160;&#30011;" />
+<Location id="21" path="/vol02/CloudDrive/WebDAV/&#30005;&#35270;&#21095;/&#21160;&#30011;&#29255;/&#26085;&#38889;&#21160;&#30011;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="4" type="show" title="&#22269;&#20135;&#21095;" agent="tv.plex.agents.series" scanner="Plex TV Series" language="zh-CN" uuid="2b026ffd-97e9-40a6-b51e-4dcab6fa7a88" updatedAt="1754734197" createdAt="1753000464" scannedAt="1753274356" content="1" directory="1" contentChangedAt="42077" hidden="0">
+<Location id="7" path="/vol02/CloudDrive/WebDAV/&#30005;&#35270;&#21095;/&#22269;&#20135;&#21095;" />
+<Location id="8" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#35270;&#21095;/&#22269;&#20135;&#21095;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="6" type="show" title="&#26085;&#38889;&#21095;" agent="tv.plex.agents.series" scanner="Plex TV Series" language="zh-CN" uuid="bd3f69fa-3c7b-4bd3-b753-df38d4a0709a" updatedAt="1754734713" createdAt="1753000874" scannedAt="1753274357" content="1" directory="1" contentChangedAt="58268" hidden="0">
+<Location id="11" path="/vol02/CloudDrive/WebDAV/&#30005;&#35270;&#21095;/&#26085;&#38889;&#21095;" />
+<Location id="12" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#35270;&#21095;/&#26085;&#38889;&#21095;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="5" type="show" title="&#27431;&#32654;&#21095;" agent="tv.plex.agents.series" scanner="Plex TV Series" language="zh-CN" uuid="6b656a5e-5ad1-43dc-ae71-9ba5ae25ef93" updatedAt="1754734486" createdAt="1753000615" scannedAt="1753274357" content="1" directory="1" contentChangedAt="60800" hidden="0">
+<Location id="9" path="/vol02/CloudDrive/WebDAV/&#30005;&#35270;&#21095;/&#27431;&#32654;&#21095;" />
+<Location id="10" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#35270;&#21095;/&#27431;&#32654;&#21095;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="11" type="show" title="&#32426;&#24405;&#29255;" agent="tv.plex.agents.series" scanner="Plex TV Series" language="zh-CN" uuid="f1058d29-390d-424c-bdd1-4a524d4cc948" updatedAt="1753268651" createdAt="1753002682" scannedAt="1753274359" content="1" directory="1" contentChangedAt="14670" hidden="0">
+<Location id="23" path="/vol02/&#24433;&#38899;&#23186;&#20307;/media/&#30005;&#35270;&#21095;/&#32426;&#24405;&#29255;" />
+<Location id="24" path="/vol02/CloudDrive/WebDAV/&#32426;&#24405;&#29255;" />
+</Directory>
+<Directory allowSync="1" filters="1" refreshing="0" key="12" type="artist" title="&#38899;&#20048;" agent="tv.plex.agents.music" scanner="Plex Music" language="zh-CN" uuid="eb6b146e-5a44-46cc-810d-1b84b38c17ef" updatedAt="1753002773" createdAt="1753002738" scannedAt="1753274669" content="1" directory="1" contentChangedAt="60394" hidden="0">
+<Location id="25" path="/vol02/&#24433;&#38899;&#23186;&#20307;/download/&#38899;&#20048;" />
+<Location id="26" path="/vol02/CloudDrive/WebDAV/&#38899;&#20048;" />
+</Directory>
+</MediaContainer>

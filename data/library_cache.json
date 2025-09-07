@@ -1,0 +1,62 @@
+[
+  {
+    "library_id": "1",
+    "title": "中国电影",
+    "type": "movie"
+  },
+  {
+    "library_id": "7",
+    "title": "国产动画",
+    "type": "movie"
+  },
+  {
+    "library_id": "9",
+    "title": "日韩动画",
+    "type": "movie"
+  },
+  {
+    "library_id": "3",
+    "title": "日韩电影",
+    "type": "movie"
+  },
+  {
+    "library_id": "8",
+    "title": "欧美动画",
+    "type": "movie"
+  },
+  {
+    "library_id": "2",
+    "title": "欧美电影",
+    "type": "movie"
+  },
+  {
+    "library_id": "10",
+    "title": "动画片",
+    "type": "show"
+  },
+  {
+    "library_id": "4",
+    "title": "国产剧",
+    "type": "show"
+  },
+  {
+    "library_id": "6",
+    "title": "日韩剧",
+    "type": "show"
+  },
+  {
+    "library_id": "5",
+    "title": "欧美剧",
+    "type": "show"
+  },
+  {
+    "library_id": "11",
+    "title": "纪录片",
+    "type": "show"
+  },
+  {
+    "library_id": "12",
+    "title": "音乐",
+    "type": "artist"
+  }
+]

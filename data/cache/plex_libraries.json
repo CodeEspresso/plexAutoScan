@@ -1,0 +1,74 @@
+[
+  {
+    "library_id": "1",
+    "title": "\u4e2d\u56fd\u7535\u5f71",
+    "type": "movie",
+    "path": "/vol02/CloudDrive/WebDAV/\u7535\u5f71/\u4e2d\u56fd\u7535\u5f71"
+  },
+  {
+    "library_id": "7",
+    "title": "\u56fd\u4ea7\u52a8\u753b",
+    "type": "movie",
+    "path": "/vol02/CloudDrive/WebDAV/\u7535\u5f71/\u52a8\u753b\u7535\u5f71/\u56fd\u4ea7\u52a8\u753b"
+  },
+  {
+    "library_id": "9",
+    "title": "\u65e5\u97e9\u52a8\u753b",
+    "type": "movie",
+    "path": "/vol02/CloudDrive/WebDAV/\u7535\u5f71/\u52a8\u753b\u7535\u5f71/\u65e5\u97e9\u52a8\u753b"
+  },
+  {
+    "library_id": "3",
+    "title": "\u65e5\u97e9\u7535\u5f71",
+    "type": "movie",
+    "path": "/vol02/CloudDrive/WebDAV/\u7535\u5f71/\u65e5\u97e9\u7535\u5f71"
+  },
+  {
+    "library_id": "8",
+    "title": "\u6b27\u7f8e\u52a8\u753b",
+    "type": "movie",
+    "path": "/vol02/CloudDrive/WebDAV/\u7535\u5f71/\u52a8\u753b\u7535\u5f71/\u6b27\u7f8e\u52a8\u753b"
+  },
+  {
+    "library_id": "2",
+    "title": "\u6b27\u7f8e\u7535\u5f71",
+    "type": "movie",
+    "path": "/vol02/CloudDrive/WebDAV/\u7535\u5f71/\u6b27\u7f8e\u7535\u5f71"
+  },
+  {
+    "library_id": "10",
+    "title": "\u52a8\u753b\u7247",
+    "type": "show",
+    "path": "/vol02/\u5f71\u97f3\u5a92\u4f53/media/\u7535\u89c6\u5267/\u52a8\u753b\u7247"
+  },
+  {
+    "library_id": "4",
+    "title": "\u56fd\u4ea7\u5267",
+    "type": "show",
+    "path": "/vol02/CloudDrive/WebDAV/\u7535\u89c6\u5267/\u56fd\u4ea7\u5267"
+  },
+  {
+    "library_id": "6",
+    "title": "\u65e5\u97e9\u5267",
+    "type": "show",
+    "path": "/vol02/CloudDrive/WebDAV/\u7535\u89c6\u5267/\u65e5\u97e9\u5267"
+  },
+  {
+    "library_id": "5",
+    "title": "\u6b27\u7f8e\u5267",
+    "type": "show",
+    "path": "/vol02/CloudDrive/WebDAV/\u7535\u89c6\u5267/\u6b27\u7f8e\u5267"
+  },
+  {
+    "library_id": "11",
+    "title": "\u7eaa\u5f55\u7247",
+    "type": "show",
+    "path": "/vol02/\u5f71\u97f3\u5a92\u4f53/media/\u7535\u89c6\u5267/\u7eaa\u5f55\u7247"
+  },
+  {
+    "library_id": "12",
+    "title": "\u97f3\u4e50",
+    "type": "artist",
+    "path": "/vol02/\u5f71\u97f3\u5a92\u4f53/download/\u97f3\u4e50"
+  }
+]
