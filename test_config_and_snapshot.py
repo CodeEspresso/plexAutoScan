@@ -67,9 +67,10 @@ def test_snapshot_generation(mount_paths):
     
     # 生成快照
     try:
-        snapshot_path, snapshot_content, success = snapshot_manager.generate_snapshot(test_directory)
+        snapshot_path, snapshot_content, success, added_files = snapshot_manager.generate_snapshot(test_directory)
         if success:
             logger.info(f"快照生成成功: {snapshot_path}")
+            logger.info(f"新增文件数量: {len(added_files)}")
             return True
         else:
             logger.error("快照生成失败")

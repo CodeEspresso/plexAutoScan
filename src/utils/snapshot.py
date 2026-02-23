@@ -43,81 +43,69 @@ class SnapshotManager:
         self.max_retries = self.config.get('MAX_RETRIES', 3)
         self.retry_delay = self.config.get('RETRY_DELAY', 2)
         self.snapshot_timeout = self.config.get('SNAPSHOT_TIMEOUT', 300)
-        self.snapshot_dir = self.config.get('SNAPSHOT_DIR', '/tmp/snapshots')
+        
+        # 获取快照目录，支持Docker和本地环境
+        snapshot_dir = self.config.get('SNAPSHOT_DIR', '/data/snapshots')
+        if not os.path.exists(snapshot_dir) and snapshot_dir.startswith('/data/'):
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            local_snapshot_dir = os.path.join(project_root, 'data', 'snapshots')
+            logger.info(f"快照目录 {snapshot_dir} 不存在，使用本地目录: {local_snapshot_dir}")
+            snapshot_dir = local_snapshot_dir
+        self.snapshot_dir = snapshot_dir
         
         # 确保快照目录存在
         ensure_directory(self.snapshot_dir)
     
-    # 即将修改的符号: generate_snapshot方法（参数和verify_path调用）
+    # 即将修改的符号: generate_snapshot方法（返回新增文件列表，而非首次扫描标志）
+    # 变更理由：通过"快照文件是否存在"判断首次扫描不可靠，应直接返回新增文件列表
     
-    def generate_snapshot(self, directory_path, force_update=False, test_env=False):
-        """生成目录快照
+    def generate_snapshot(self, directory_path, force_update=False):
+        """生成目录快照并比较变化
         
         Args:
             directory_path (str): 目录路径
             force_update (bool): 是否强制更新快照
-            test_env (bool): 是否为测试环境
             
         Returns:
-            tuple: (快照文件路径, 快照内容, 是否成功)
+            tuple: (快照文件路径, 快照内容, 是否成功, 新增文件列表)
+                   新增文件列表包含本次扫描发现的新文件路径
         """
-        # 导入超时控制函数
         from .timeout_decorator import run_with_timeout
         
-        # 核心快照生成逻辑
         def _generate_snapshot_core():
             try:
-                # 验证目录路径 - 传递test_env参数
-                verified_path, is_valid = verify_path(directory_path, test_env)
+                verified_path, is_valid = verify_path(directory_path)
                 if not is_valid:
                     logger.error(f"无效的目录路径: {directory_path}")
-                    return '', {}, False
+                    return '', {}, False, []
                 
-                # 获取快照文件名
                 snapshot_filename = self._get_snapshot_filename(verified_path)
                 snapshot_path = os.path.join(self.snapshot_dir, snapshot_filename)
                 
-                # 检查是否需要生成新快照
-                if os.path.exists(snapshot_path) and not force_update:
-                    # 尝试读取现有快照
+                # 读取旧快照（如果存在）用于比较
+                old_file_set = set()
+                has_old_snapshot = os.path.exists(snapshot_path)
+                if has_old_snapshot:
                     try:
                         with open(snapshot_path, 'r', encoding='utf-8') as f:
-                            snapshot_content = json.load(f)
-                        logger.debug(f"使用现有快照: {snapshot_path}")
-                        return snapshot_path, snapshot_content, True
+                            old_snapshot_content = json.load(f)
+                        old_file_set = {f['path'] for f in old_snapshot_content.get('files', [])}
+                        logger.debug(f"读取旧快照: {snapshot_path}，包含 {len(old_file_set)} 个文件")
                     except Exception as e:
-                        logger.error(f"读取现有快照失败 {snapshot_path}: {str(e)}")
+                        logger.warning(f"读取旧快照失败，将视为无旧快照: {str(e)}")
+                        old_file_set = set()
+                        has_old_snapshot = False
                 
-                # 如果存在旧快照且不是强制更新，先备份旧快照
-                # 先初始化snapshot_content变量
-                snapshot_content = None
-                
-                if os.path.exists(snapshot_path):
-                    timestamp = time.strftime("%Y%m%d_%H%M%S")
-                    backup_path = f"{snapshot_path}.{timestamp}.old"
-                    try:
-                        shutil.copy2(snapshot_path, backup_path)
-                        logger.info(f"已备份旧快照到: {backup_path}")
-                    except Exception as e:
-                        logger.warning(f"备份旧快照失败: {str(e)}")
-                
-                # 调用Python模块生成快照
-                # 确保可以导入snapshot_utils模块
+                # 每次都重新扫描目录，获取当前文件列表
                 import sys
-                # 添加项目根目录到Python路径
                 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 from ..snapshot_utils import generate_snapshot
                 
-                # 准备快照输出路径
                 temp_snapshot_path = os.path.join(self.snapshot_dir, f'temp_{hashlib.md5(verified_path.encode()).hexdigest()}.snapshot')
                 
-                # 获取配置中的最小文件大小（MB），并添加验证逻辑
                 min_file_size_mb = self.config.get('MIN_FILE_SIZE_MB', 10)
-                
-                # 验证MIN_FILE_SIZE_MB是否为有效数字且在合理范围内
                 try:
                     min_file_size_mb = float(min_file_size_mb)
-                    # 设置合理的范围：0-10000 MB (10GB)
                     if min_file_size_mb < 0:
                         min_file_size_mb = 0
                     elif min_file_size_mb > 10000:
@@ -127,104 +115,114 @@ class SnapshotManager:
                     logger.error(f"无效的最小文件大小配置: {min_file_size_mb}，使用默认值10MB")
                     min_file_size_mb = 10
                 
-                logger.info(f"使用最小文件大小过滤: {min_file_size_mb} MB")
+                logger.info(f"扫描目录 {verified_path}，最小文件大小: {min_file_size_mb} MB")
                 
-                # 调用generate_snapshot函数，使用配置中的最小文件大小
                 result = generate_snapshot(
                     dir=verified_path,
                     output_file=temp_snapshot_path,
                     scan_delay=0.1,
-                    max_files=0,  # 无限制
+                    max_files=0,
                     skip_large=False,
                     large_threshold=10000,
                     min_size=0,
                     min_size_mb=min_file_size_mb
                 )
                 
-                if result > 0:
-                    # 读取生成的快照文件
-                    try:
-                        with open(temp_snapshot_path, 'rb') as f:
-                            raw_data = f.read().split(b'\x00')
-                            # 转换为字典格式的快照内容，包含文件详细信息
-                        files_with_details = []
-                        for f in raw_data:
-                            if f:
-                                file_path = f.decode('utf-8', errors='replace')
-                                try:
-                                    if os.path.isfile(file_path):
-                                        file_size = os.path.getsize(file_path)
-                                        file_mtime = os.path.getmtime(file_path)
-                                        files_with_details.append({
-                                            'path': file_path,
-                                            'size': file_size,
-                                            'mtime': file_mtime
-                                        })
-                                    else:
-                                        # 对于非文件（目录或链接），添加基本信息
-                                        files_with_details.append({
-                                            'path': file_path,
-                                            'size': 0,
-                                            'mtime': 0
-                                        })
-                                except Exception as e:
-                                    logger.warning(f"获取文件信息失败 {file_path}: {str(e)}")
+                if result <= 0:
+                    logger.error(f"扫描目录失败，返回码: {result}")
+                    return '', {}, False, []
+                
+                # 解析扫描结果
+                try:
+                    with open(temp_snapshot_path, 'rb') as f:
+                        raw_data = f.read().split(b'\x00')
+                    
+                    files_with_details = []
+                    for f in raw_data:
+                        if f:
+                            file_path = f.decode('utf-8', errors='replace')
+                            try:
+                                if os.path.isfile(file_path):
+                                    file_size = os.path.getsize(file_path)
+                                    file_mtime = os.path.getmtime(file_path)
+                                    files_with_details.append({
+                                        'path': file_path,
+                                        'size': file_size,
+                                        'mtime': file_mtime
+                                    })
+                                else:
                                     files_with_details.append({
                                         'path': file_path,
                                         'size': 0,
                                         'mtime': 0
                                     })
-                        
-                        snapshot_content = {
-                            'files': files_with_details,
-                            'directory': verified_path,
-                            'timestamp': datetime.now().isoformat(),
-                            'file_count': result,
-                            'min_file_size_mb': min_file_size_mb  # 记录使用的最小文件大小
-                        }
-                        # 清理临时文件
-                        try:
-                            os.remove(temp_snapshot_path)
-                        except:
-                            pass
-                        
-                        # 输出扫描统计信息
-                        logger.info(f"扫描目录 {verified_path}: 找到 {len(snapshot_content['files'])} 个文件 (忽略小于 {min_file_size_mb} MB 的文件)")
-                    except Exception as e:
-                        logger.error(f"读取快照文件失败: {str(e)}")
-                        return '', {}, False
-                else:
-                    logger.error(f"生成快照失败，返回码: {result}")
-                    return '', {}, False
-                
-                # 保存快照
-                try:
-                    if snapshot_content:
-                        with open(snapshot_path, 'w', encoding='utf-8') as f:
-                            json.dump(snapshot_content, f, ensure_ascii=False, indent=2)
-                        logger.info(f"快照生成成功: {snapshot_path}")
-                        return snapshot_path, snapshot_content, True
-                    else:
-                        logger.error(f"无法保存快照: snapshot_content为空")
-                        return '', {}, False
+                            except Exception as e:
+                                logger.warning(f"获取文件信息失败 {file_path}: {str(e)}")
+                                files_with_details.append({
+                                    'path': file_path,
+                                    'size': 0,
+                                    'mtime': 0
+                                })
+                    
+                    try:
+                        os.remove(temp_snapshot_path)
+                    except:
+                        pass
+                    
+                    logger.info(f"扫描完成: 找到 {len(files_with_details)} 个文件")
                 except Exception as e:
-                    logger.error(f"保存快照失败 {snapshot_path}: {str(e)}")
-                    return '', {}, False
+                    logger.error(f"解析扫描结果失败: {str(e)}")
+                    return '', {}, False, []
+                
+                # 构建新快照内容
+                snapshot_content = {
+                    'files': files_with_details,
+                    'directory': verified_path,
+                    'timestamp': datetime.now().isoformat(),
+                    'file_count': result,
+                    'min_file_size_mb': min_file_size_mb
+                }
+                
+                # 计算新增文件
+                new_file_set = {f['path'] for f in files_with_details}
+                added_files = list(new_file_set - old_file_set)
+                removed_files = list(old_file_set - new_file_set)
+                
+                # 记录变化情况
+                if not has_old_snapshot:
+                    logger.info(f"首次扫描目录，建立基准快照，共 {len(files_with_details)} 个文件")
+                elif added_files:
+                    logger.info(f"检测到 {len(added_files)} 个新增文件")
+                if removed_files:
+                    logger.info(f"检测到 {len(removed_files)} 个删除文件")
+                if has_old_snapshot and not added_files and not removed_files:
+                    logger.info("文件列表无变化")
+                
+                # 保存新快照
+                try:
+                    with open(snapshot_path, 'w', encoding='utf-8') as f:
+                        json.dump(snapshot_content, f, ensure_ascii=False, indent=2)
+                    logger.info(f"快照已保存: {snapshot_path}")
+                except Exception as e:
+                    logger.error(f"保存快照失败: {str(e)}")
+                
+                return snapshot_path, snapshot_content, True, added_files
+                
             except Exception as e:
                 logger.error(f"生成快照过程中发生错误: {str(e)}")
-                return '', {}, False
+                return '', {}, False, []
         
-        # 使用try-except捕获生成快照过程中的错误
         try:
             result = _generate_snapshot_core()
         except Exception as e:
             logger.error(f"生成快照过程中发生错误: {str(e)}")
-            result = ('', {}, False)
+            result = ('', {}, False, [])
         
-        # 返回结果，错误处理由调用方统一管理
-        snapshot_path, snapshot_content, is_success = result
-        
-        return result
+        snapshot_path, snapshot_content, is_success, added_files = result
+        return snapshot_path, snapshot_content, is_success, added_files
+    
+    # 即将修改的符号: _get_snapshot_filename方法（移除时间戳，使文件名稳定）
+    # 变更理由：快照文件名包含时间戳导致每次运行时文件名不同，使得首次扫描判断失效，Plex扫描永远被跳过
     
     def _get_snapshot_filename(self, directory_path):
         """获取快照文件名
@@ -239,20 +237,18 @@ class SnapshotManager:
             # 规范化路径
             normalized_path = normalize_path(directory_path)
             
-            # 使用路径的哈希值作为文件名的一部分
+            # 使用路径的哈希值作为文件名
+            # 同一目录始终生成相同的文件名，用于判断是否为首次扫描
             path_hash = hashlib.md5(normalized_path.encode('utf-8')).hexdigest()[:10]
             
-            # 添加时间戳以避免冲突
-            timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-            
-            # 生成文件名
-            filename = f'snapshot_{path_hash}_{timestamp}.json'
+            # 生成文件名（不包含时间戳，保证同一目录文件名一致）
+            filename = f'snapshot_{path_hash}.json'
             
             return filename
         except Exception as e:
             logger.error(f"生成快照文件名失败 {directory_path}: {str(e)}")
             # 返回默认文件名作为后备方案
-            return f'snapshot_default_{time.time()}.json'
+            return f'snapshot_default_{int(time.time())}.json'
     
     def verify_snapshot(self, snapshot_path):
         """验证快照文件的有效性

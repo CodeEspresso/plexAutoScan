@@ -1,6 +1,7 @@
 # NAS连接配置
 NAS_HOST=your-nas-host        # NAS的IP地址或域名
 NAS_USER=admin                # NAS用户名
+NAS_SSH_PORT=22               # SSH端口
 NAS_PATH=/volume1/docker/plexAutoScan  # NAS上的项目路径
 
 # SSH密钥路径（可选，如果使用密钥认证）
@@ -8,3 +9,6 @@ NAS_PATH=/volume1/docker/plexAutoScan  # NAS上的项目路径
 
 # 是否在部署前检查Git状态（yes/no）
 CHECK_GIT_STATUS=yes
+
+# 是否使用sudo执行docker命令（yes/no）
+USE_SUDO=no

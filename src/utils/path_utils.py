@@ -31,7 +31,7 @@ class PathUtils:
         Returns:
             str: 规范化后的路径
         """
-        if not path:
+        if not path or not path.strip():
             return ''
         
         try:
@@ -39,8 +39,12 @@ class PathUtils:
             if not isinstance(path, str):
                 path = str(path)
             
-            # 清理可能的引号
-            cleaned_path = path.strip('"').strip("'")
+            # 清理可能的引号和首尾空格
+            cleaned_path = path.strip().strip('"').strip("'")
+            
+            # 再次检查是否为空
+            if not cleaned_path:
+                return ''
             
             # 规范化路径
             norm_path = os.path.normpath(cleaned_path)
@@ -101,12 +105,11 @@ class PathUtils:
             return False
     
     @staticmethod
-    def verify_path(path, test_env=False, max_retries=5, retry_delay=10):
+    def verify_path(path, max_retries=5, retry_delay=10):
         """验证路径是否可访问
         
         Args:
             path (str): 要验证的路径
-            test_env (bool): 是否为测试环境
             max_retries (int): 最大重试次数（用于Docker环境下的挂载延迟）
             retry_delay (int): 重试间隔（秒）
             
@@ -134,6 +137,17 @@ class PathUtils:
                 
                 # 规范化路径
                 verified_path = PathUtils.normalize_path(cleaned_path)
+                
+                # 安全检查：防止扫描根目录
+                # 变更理由：避免程序意外扫描根目录导致系统卡死
+                if verified_path in ['/', '', '/root', '/home']:
+                    logger.error(f"拒绝扫描根目录或关键系统目录: {verified_path}")
+                    return 'ERROR:ROOT_PATH_NOT_ALLOWED', False
+                
+                # 检查路径是否包含反斜杠（配置解析错误）
+                if '\\' in verified_path:
+                    logger.error(f"路径包含反斜杠，可能是配置解析错误: {verified_path}")
+                    return 'ERROR:INVALID_PATH_FORMAT', False
                 
                 # 检查Docker环境
                 is_docker = PathUtils.is_docker_environment()
@@ -255,19 +269,35 @@ class PathUtils:
                             
                             # 对于WebDAV路径，使用宽松的权限检查
                             if permission_check == 'relaxed':
+                                # 首先检查路径是否存在
+                                path_exists = run_with_timeout(
+                                    _check_path_exists,
+                                    verified_path,
+                                    timeout_seconds=check_timeout,
+                                    default=False,
+                                    error_message=f"Docker环境下检查WebDAV路径存在性超时: {verified_path}"
+                                )
+                                
+                                if not path_exists:
+                                    logger.warning(f"WebDAV路径不存在: {verified_path}")
+                                    return verified_path, False
+                                
                                 # 尝试列出目录内容
                                 try:
                                     if os.path.isdir(verified_path):
                                         test_files = os.listdir(verified_path)
                                         logger.debug(f"WebDAV权限验证成功 - 文件数: {len(test_files)}")
                                         return verified_path, True
-                                except PermissionError:
-                                    logger.warning(f"WebDAV权限验证失败，但继续尝试")
+                                    else:
+                                        logger.warning(f"WebDAV路径不是目录: {verified_path}")
+                                        return verified_path, False
+                                except PermissionError as pe:
+                                    logger.error(f"WebDAV权限验证失败: {str(pe)}")
+                                    return verified_path, False
                                 except Exception as e:
                                     logger.warning(f"WebDAV权限验证异常: {str(e)}")
-                                
-                                # 即使权限检查失败，也返回True（宽松模式）
-                                return verified_path, True
+                                    # 宽松模式：对于其他异常，仍然返回True
+                                    return verified_path, True
                             else:
                                 # 严格的权限检查
                                 has_permission = run_with_timeout(
@@ -422,8 +452,8 @@ class PathUtils:
                             else:
                                 logger.warning(f"路径不存在: {verified_path}")
                                 return verified_path, False
-                elif not test_env:
-                    # 生产环境(非Docker): 严格检查路径存在性
+                else:
+                    # 非Docker环境: 严格检查路径存在性
                     path_exists = run_with_timeout(
                         _check_path_exists,
                         verified_path,
@@ -448,73 +478,49 @@ class PathUtils:
                         logger.error(f"检查路径权限时出错: {str(e)}")
                         return verified_path, False
                     
-                    # 直接使用传入的test_env参数来确定路径范围验证逻辑
-                    if test_env:
-                        # 测试环境: 直接返回True
-                        logger.debug("测试环境，跳过路径范围验证")
+                    # 检查路径是否在有效的挂载路径列表中
+                    # 从环境变量读取配置文件路径
+                    config_path = os.environ.get('CONFIG_PATH', '/data/config.env')
+                    config = Config(config_path)
+                    mount_paths_str = config.get('MOUNT_PATHS', '')
+                    
+                    if not mount_paths_str:
+                        logger.warning("未配置MOUNT_PATHS，跳过路径范围验证")
                         return verified_path, True
-                    else:
-                        # 生产环境: 严格检查路径是否在有效的生产路径列表中
-                        # 获取MOUNT_PATHS配置
-                        # 优先检查是否在Docker环境中，即使TEST_ENV=1
-                        is_production = PathUtils.is_docker_environment() or (not test_env)
-                        
-                        # 从环境变量读取配置文件路径
-                        config_path = os.environ.get('CONFIG_PATH', '/data/config.env')
-                        # Config类会自动从多个位置加载配置文件
-                        config = Config(config_path)
-                        mount_paths_str = config.get('MOUNT_PATHS', '')
-                        
-                        # 如果在生产环境，确保使用正确的MOUNT_PATHS
-                        if is_production and not mount_paths_str:
-                            # 在Docker环境中，如果没有配置MOUNT_PATHS，使用默认路径
-                            if PathUtils.is_docker_environment():
-                                mount_paths_str = os.environ.get('PROD_BASE_PATH', '/vol02/CloudDrive/WebDAV')
-                            logger.warning(f"未配置有效的生产挂载路径，使用默认值: {mount_paths_str}")
-                        # 如果仍然没有有效的挂载路径，使用一个安全的默认行为
-                        if not mount_paths_str:
-                            logger.error("未找到有效的挂载路径配置，将严格验证路径")
-                            # 返回False，因为没有有效的挂载路径来验证
-                            return verified_path, False
-                        
-                        # 解析MOUNT_PATHS配置
-                        paths = []
-                        for separator in [',', ';', '\n', ' ']:
-                            if separator in mount_paths_str:
-                                paths = mount_paths_str.split(separator)
+                    
+                    # 解析MOUNT_PATHS配置
+                    paths = []
+                    for separator in [',', ';', '\n', ' ']:
+                        if separator in mount_paths_str:
+                            paths = mount_paths_str.split(separator)
+                            break
+                    
+                    if not paths:
+                        paths = [mount_paths_str]
+                    
+                    mount_paths = [p.strip() for p in paths if p.strip()]
+                    
+                    if not mount_paths:
+                        logger.warning("解析后的挂载路径列表为空")
+                        return verified_path, True
+                    
+                    # 检查路径是否在有效的挂载路径列表中
+                    is_valid = False
+                    for mount_path in mount_paths:
+                        mount_path_normalized = PathUtils.normalize_path(mount_path)
+                        if sys.platform == 'win32':
+                            if verified_path.startswith(mount_path_normalized + '\\') or verified_path == mount_path_normalized:
+                                is_valid = True
                                 break
-                        
-                        # 如果没有找到分隔符，整个字符串作为一个路径
-                        if not paths:
-                            paths = [mount_paths_str]
-                        
-                        # 清理并过滤空路径
-                        mount_paths = [path.strip() for path in paths if path.strip()]
-                        
-                        if not mount_paths:
-                            logger.warning("解析后的生产挂载路径列表为空")
-                            return verified_path, True
-                        
-                        # 检查路径是否在有效的生产挂载路径列表中
-                        is_valid = False
-                        for mount_path in mount_paths:
-                            mount_path_normalized = PathUtils.normalize_path(mount_path)
-                            if sys.platform == 'win32':
-                                if verified_path.startswith(mount_path_normalized + '\\') or verified_path == mount_path_normalized:
-                                    is_valid = True
-                                    break
-                            else:
-                                if verified_path.startswith(mount_path_normalized + '/') or verified_path == mount_path_normalized:
-                                    is_valid = True
-                                    break
-                        
-                        if not is_valid:
-                            logger.warning(f"路径不在有效的生产挂载路径范围内: {verified_path}")
-                            return verified_path, False
-                        
-                        return verified_path, True
-                else:
-                    # 测试环境: 不严格检查路径存在性，但确保路径不为空
+                        else:
+                            if verified_path.startswith(mount_path_normalized + '/') or verified_path == mount_path_normalized:
+                                is_valid = True
+                                break
+                    
+                    if not is_valid:
+                        logger.warning(f"路径不在有效的挂载路径范围内: {verified_path}")
+                        return verified_path, False
+                    
                     return verified_path, True
             except Exception as e:
                 logger.error(f"验证路径失败 {path}: {str(e)}")
@@ -815,8 +821,8 @@ def normalize_path(path):
 def is_excluded(path, exclude_list):
     return PathUtils.is_excluded(path, exclude_list)
 
-def verify_path(path, test_env=False):
-    return PathUtils.verify_path(path, test_env)
+def verify_path(path, max_retries=5, retry_delay=10):
+    return PathUtils.verify_path(path, max_retries, retry_delay)
 
 def is_docker_environment():
     return PathUtils.is_docker_environment()

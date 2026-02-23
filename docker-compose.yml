@@ -11,6 +11,8 @@ services:
       - ./data/snapshots:/data/snapshots
       # 直接映射实际的云盘挂载路径到Docker容器内
       - /vol02/CloudDrive/WebDAV:/vol02/CloudDrive/WebDAV:ro
+      # 挂载影音媒体目录（NFS挂载）
+      - /vol02/影音媒体:/vol02/影音媒体:ro
       # 挂载环境调试脚本
       # 确保文件存在，避免Docker自动创建目录
       - ./debug_docker_env.sh:/debug_docker_env.sh:ro

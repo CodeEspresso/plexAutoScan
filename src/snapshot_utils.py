@@ -19,8 +19,17 @@ import socket
 # 导入配置管理类
 from .utils.config import Config
 
-# 初始化全局配置对象
-config = Config('config.env')
+# 全局配置对象（延迟初始化）
+_config = None
+
+def _get_config():
+    """获取配置对象（延迟初始化，确保在正确的环境中加载配置）"""
+    global _config
+    if _config is None:
+        # 在Docker环境中使用正确的配置文件路径
+        config_path = '/data/config.env' if os.path.exists('/data/config.env') else 'config.env'
+        _config = Config(config_path)
+    return _config
 
 # 设置socket默认超时时间
 socket.setdefaulttimeout(30)
@@ -270,21 +279,6 @@ def is_docker_environment():
     return env_detector.is_docker()
 
 def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=False, large_threshold=10000, min_size=0, min_size_mb=0, retry_count=3, timeout=None):
-    # 从配置获取WebDAV路径前缀
-    prod_path_prefix = config.get('PROD_PATH_PREFIX', '/vol02/CloudDrive/WebDAV')
-    test_path_prefix = config.get('TEST_PATH_PREFIX', '/Volumes/CloudDrive/WebDAV')
-    is_webdav_path = dir.startswith((prod_path_prefix, test_path_prefix))
-    
-    # 为WebDAV路径增加超时时间和重试次数
-    if is_webdav_path:
-        # 使用统一的超时配置
-        timeout = timeout_config.get_timeout('very_long')  # 超长超时：30分钟
-        # 增加WebDAV路径的重试次数
-        retry_count = max(retry_count, int(os.environ.get('WEBDAV_RETRY_COUNT', '5')))
-        logger.logger.info(f"为WebDAV路径设置超时时间: {timeout}秒，重试次数: {retry_count}")
-    else:
-        # 使用默认超时配置
-        timeout = timeout_config.get_timeout('long')  # 长时间超时：10分钟
     """生成目录快照
     
     Args:
@@ -302,11 +296,34 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
     Returns:
         int: 成功时返回文件数量，失败时返回负的错误码
     """
+    # 从配置获取WebDAV路径前缀列表
+    config = _get_config()
+    webdav_prefixes = config.get_list('WEBDAV_PATH_PREFIXES', ['/vol02/CloudDrive/WebDAV'])
+    nfs_prefixes = config.get_list('NFS_PATH_PREFIXES', [])
+    smb_prefixes = config.get_list('SMB_PATH_PREFIXES', [])
+    
+    # 判断路径类型
+    is_webdav_path = any(dir.startswith(prefix) for prefix in webdav_prefixes)
+    is_nfs_path = any(dir.startswith(prefix) for prefix in nfs_prefixes)
+    is_smb_path = any(dir.startswith(prefix) for prefix in smb_prefixes)
+    
+    # 为WebDAV路径增加超时时间和重试次数
+    if is_webdav_path:
+        # 使用统一的超时配置
+        timeout = timeout_config.get_timeout('very_long')  # 超长超时：30分钟
+        # 增加WebDAV路径的重试次数
+        retry_count = max(retry_count, int(os.environ.get('WEBDAV_RETRY_COUNT', '5')))
+        logger.info(f"为WebDAV路径设置超时时间: {timeout}秒，重试次数: {retry_count}")
+    else:
+        # 使用默认超时配置
+        timeout = timeout_config.get_timeout('long')  # 长时间超时：10分钟
+    
     # 从utils.timeout_decorator导入超时控制函数
     from .utils.timeout_decorator import run_with_timeout
     
     # 定义核心生成快照逻辑函数
     def _generate_snapshot_core():
+        nonlocal is_webdav_path
         try:
             logger.info(f"开始扫描目录: {dir}")
             
@@ -341,14 +358,14 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
             
             # 处理大型目录的并行扫描
             # 从环境变量获取SMB最大线程数配置，如果没有则使用默认值5
-            smb_max_workers = os.environ.get('SMB_MAX_WORKERS', '5')
+            smb_max_workers = os.environ.get('SMB_MAX_WORKERS', '10')
             try:
                 smb_max_workers = int(smb_max_workers)
-                # 确保线程数在合理范围内 (5-10) 根据用户要求调整
-                smb_max_workers = max(5, min(smb_max_workers, 10))
+                # 确保线程数在合理范围内 (5-20) 根据用户要求调整
+                smb_max_workers = max(5, min(smb_max_workers, 20))
             except ValueError:
-                logger.warning(f"无效的SMB_MAX_WORKERS配置: {smb_max_workers}，使用默认值5")
-                smb_max_workers = 5
+                logger.warning(f"无效的SMB_MAX_WORKERS配置: {smb_max_workers}，使用默认值10")
+                smb_max_workers = 10
                 
             # 初始化动态线程数调整相关变量
             current_workers = max(5, min(smb_max_workers // 2, 10))  # 初始使用较低线程数，范围5-10
@@ -356,7 +373,11 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
             success_count = 0
             max_workers = smb_max_workers
             min_workers = 5  # 线程数下限设为5，确保在用户要求的5-10范围内
-            batch_size = 500  # 批处理大小
+            
+            # 从环境变量获取批处理大小配置
+            batch_size = int(os.environ.get('BATCH_SIZE', '1000'))
+            batch_size = max(100, min(batch_size, 2000))  # 限制在100-2000范围内
+            
             error_threshold = 3  # 超过这个错误数就降低线程数
             recovery_threshold = 10  # 连续成功处理这个数量就增加线程数
             adaptive_batch_delay = scan_delay
@@ -431,10 +452,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
             use_parallel = False
             # 对于WebDAV路径，降低并行处理的门槛（从1000个文件降低到200个文件）
             # 这样可以更早启动并行处理，提高WebDAV路径的扫描速度
-            # 从配置中获取WebDAV路径前缀
-            prod_path_prefix = config.get('PROD_PATH_PREFIX', '/vol02/CloudDrive/WebDAV')
-            test_path_prefix = config.get('TEST_PATH_PREFIX', '/Volumes/CloudDrive/WebDAV')
-            if dir.startswith((prod_path_prefix, test_path_prefix)):
+            if is_webdav_path:
                 if max_files == 0 or max_files > 200:
                     use_parallel = True
                     logger.debug(f"[WebDAV] 启用并行处理 (文件数阈值: 200)")
@@ -491,15 +509,13 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 except Exception as e:
                     error_msg = str(e)
                     # 检查是否是WebDAV路径的特殊处理
-                    prod_path_prefix = config.get('PROD_PATH_PREFIX', '/vol02/CloudDrive/WebDAV')
-                    test_path_prefix = config.get('TEST_PATH_PREFIX', '/Volumes/CloudDrive/WebDAV')
-                    is_webdav_path = file_path.startswith((prod_path_prefix, test_path_prefix))
+                    is_webdav_file = any(file_path.startswith(prefix) for prefix in webdav_prefixes)
                     
                     # 检测连接错误
                     if any(kw in error_msg.lower() for kw in ['smb', 'connection', 'timeout', 'timed out', 'unavailable', 'disconnect', 'webdav']):
                         # 增加连接错误计数
                         error_count += 1
-                        if is_webdav_path:
+                        if is_webdav_file:
                             smb_errors.append(f"[WebDAV] {file_path}: {error_msg}")
                         else:
                             smb_errors.append(f"{file_path}: {error_msg}")
@@ -509,7 +525,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                         # 如果错误数达到阈值，增加批处理延迟
                         if error_count >= error_threshold:
                             # 对WebDAV路径使用更激进的延迟调整策略
-                            if is_webdav_path:
+                            if is_webdav_file:
                                 adaptive_batch_delay = max(scan_delay * 2.5, adaptive_batch_delay * 1.8)
                                 logger.info(f"[WebDAV] 连接错误增加，增加批处理延迟: {adaptive_batch_delay:.2f}s")
                             else:
@@ -551,9 +567,10 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                         try:
                             # 对于WebDAV路径，添加额外的延迟控制，避免连接风暴
                             if is_webdav_path:
-                                # 增加延迟以更有效地控制请求频率
-                                web_delay = float(os.environ.get('WEBDAV_SCAN_DELAY', '0.1'))
-                                time.sleep(web_delay)  # 添加延迟，控制请求频率
+                                # 从环境变量获取WebDAV扫描延迟，默认0.01秒
+                                web_delay = float(os.environ.get('WEBDAV_SCAN_DELAY', '0.01'))
+                                if web_delay > 0:
+                                    time.sleep(web_delay)  # 添加延迟，控制请求频率
                             # 获取目录内容 - 为WebDAV路径添加重试机制
                             items = None
                             retry_count = int(os.environ.get('WEBDAV_DIRECTORY_RETRY', '5'))
@@ -569,7 +586,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                                         time.sleep(retry_delay)
                                         retry_delay *= 1.5  # 指数退避
                                     else:
-                                        logger.logger.error(f"[WebDAV] 读取目录内容失败: {str(e)}")
+                                        logger.error(f"[WebDAV] 读取目录内容失败: {str(e)}")
                                         items = []
                             
                             # 分别处理文件和目录
@@ -614,7 +631,10 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     
                     # 创建专门用于收集文件的线程池
                     # 针对小文件集合优化：WebDAV路径即使文件少也使用并行收集
-                    collector_workers = min(3, max_workers)  # 使用较少的线程来避免连接过多
+                    # 从环境变量获取WebDAV目录收集线程数
+                    webdav_collector_workers = int(os.environ.get('WEBDAV_COLLECTOR_WORKERS', '8'))
+                    webdav_collector_workers = max(3, min(webdav_collector_workers, 10))  # 限制在3-10范围内
+                    collector_workers = min(webdav_collector_workers, max_workers)
                     collector_executor = concurrent.futures.ThreadPoolExecutor(max_workers=collector_workers)
                     
                     # 开始并行处理目录
@@ -724,12 +744,9 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 # 检查是否为电影原盘目录（通过路径判断）
                 if any(keyword in os.path.basename(os.path.dirname(file_path)).lower() for file_path in sample_files for keyword in ['bdrip', 'bdmv', 'bluray', 'iso', '原盘', 'raw']):
                     # 在WebDAV路径下，需要更谨慎地判断是否为真的原盘目录
-                    # 检测是否是WebDAV路径
-                    prod_path_prefix = config.get('PROD_PATH_PREFIX', '/vol02/CloudDrive/WebDAV')
-                    test_path_prefix = config.get('TEST_PATH_PREFIX', '/Volumes/CloudDrive/WebDAV')
-                    is_webdav_path = any(path.startswith((prod_path_prefix, test_path_prefix)) for path in sample_files[:3])
+                    is_webdav_sample = any(any(path.startswith(prefix) for prefix in webdav_prefixes) for path in sample_files[:3])
                     
-                    if is_webdav_path:
+                    if is_webdav_sample:
                         # WebDAV路径下，只有同时满足多个条件才被识别为原盘目录
                         # 1. 包含原盘相关关键词
                         # 2. 包含原盘扩展名文件或纯数字文件名
@@ -755,61 +772,32 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 # - 文件数少：使用较大延迟，避免频繁批处理
                 # - 文件数多：使用动态延迟，确保整体扫描效率
                 # - 特殊目录：调整延迟以适应特殊需求
+                
+                # 从环境变量获取批处理延迟配置
+                env_batch_delay = float(os.environ.get('BATCH_DELAY', '0.001'))
+                
                 if is_docker_environment():
                     # Docker环境下的批处理延迟优化（卷挂载模式）
                     logger.debug(f"Docker环境下优化批处理延迟")
-                    # 检测是否是WebDAV路径
-                    prod_path_prefix = config.get('PROD_PATH_PREFIX', '/vol02/CloudDrive/WebDAV')
-                    test_path_prefix = config.get('TEST_PATH_PREFIX', '/Volumes/CloudDrive/WebDAV')
-                    is_webdav_path = any(path.startswith((prod_path_prefix, test_path_prefix)) for path in sample_files[:3])
+                    is_webdav_sample = any(any(path.startswith(prefix) for prefix in webdav_prefixes) for path in sample_files[:3])
                     
                     # 针对原盘目录（大量小文件）使用更激进的延迟策略
                     if has_disc_files:
                         logger.debug(f"原盘目录优化批处理延迟")
                         # 原盘目录通常包含大量小文件，需要更激进的延迟策略
-                        if total_batches <= 5:
-                            batch_delay = max(0.1, adaptive_batch_delay * 0.5)  # 少量批处理，使用极低延迟
-                        elif total_batches <= 20:
-                            batch_delay = max(0.05, adaptive_batch_delay * 0.3)  # 中等数量批处理，进一步降低延迟
-                        else:
-                            batch_delay = max(0.03, adaptive_batch_delay / (total_batches / 10) * 0.5)  # 大量批处理，极端激进的动态延迟
+                        batch_delay = max(env_batch_delay, 0.001)
                     # 针对WebDAV路径使用专用的批处理延迟优化
-                    elif is_webdav_path:
+                    elif is_webdav_sample:
                         logger.debug(f"[WebDAV] 优化批处理延迟")
                         # WebDAV路径在Docker环境下通常可以使用更激进的延迟策略
-                        if total_batches <= 5:
-                            batch_delay = max(0.001, adaptive_batch_delay * 0.1)  # 少量批处理，使用极低延迟
-                        elif total_batches <= 20:
-                            batch_delay = max(0.001, adaptive_batch_delay * 0.05)  # 中等数量批处理，进一步降低延迟
-                        else:
-                            batch_delay = max(0.001, adaptive_batch_delay / (total_batches / 10) * 0.1)  # 大量批处理，极端激进的动态延迟
+                        batch_delay = max(env_batch_delay, 0.001)
                     else:
                         # 普通Docker环境目录
                         # Docker环境下使用更小的初始延迟，因为卷挂载通常比SMB连接更稳定
-                        if total_batches <= 5:
-                            batch_delay = max(0.3, adaptive_batch_delay * 0.8)  # 少量批处理，使用较小延迟
-                        elif total_batches <= 20:
-                            batch_delay = max(0.2, adaptive_batch_delay * 0.5)  # 中等数量批处理，进一步减少延迟
-                        else:
-                            batch_delay = max(0.1, adaptive_batch_delay / (total_batches / 10) * 0.8)  # 大量批处理，更激进的动态延迟
+                        batch_delay = max(env_batch_delay, 0.001)
                 else:
                     # 非Docker环境保持原有策略
-                    if has_special_chars or has_large_files:
-                        # 特殊字符或大文件目录，延迟适当增加
-                        if total_batches <= 5:
-                            batch_delay = max(0.6, adaptive_batch_delay * 1.2)  # 少量批处理，使用较大延迟
-                        elif total_batches <= 20:
-                            batch_delay = max(0.4, adaptive_batch_delay * 0.9)  # 中等数量批处理，适度减少延迟
-                        else:
-                            batch_delay = max(0.2, adaptive_batch_delay / (total_batches / 10) * 1.2)  # 大量批处理，使用动态延迟
-                    else:
-                        # 普通目录，使用优化后的标准延迟
-                        if total_batches <= 5:
-                            batch_delay = max(0.4, adaptive_batch_delay)
-                        elif total_batches <= 20:
-                            batch_delay = max(0.2, adaptive_batch_delay * 0.6)
-                        else:
-                            batch_delay = max(0.1, adaptive_batch_delay / (total_batches / 10))
+                    batch_delay = max(env_batch_delay, 0.01)
                 
                 logger.debug(f"批处理延迟设置为 {batch_delay:.2f}s (特殊字符: {has_special_chars}, 大文件: {has_large_files}, 原盘文件: {has_disc_files})")
                 
@@ -818,9 +806,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 # 为Docker环境优化初始线程数
                 if is_docker_environment():
                     # 检测是否是WebDAV路径
-                    prod_path_prefix = config.get('PROD_PATH_PREFIX', '/vol02/CloudDrive/WebDAV')
-                    test_path_prefix = config.get('TEST_PATH_PREFIX', '/Volumes/CloudDrive/WebDAV')
-                    is_webdav_path = any(path.startswith((prod_path_prefix, test_path_prefix)) for path in sample_files[:3])
+                    is_webdav_sample = any(any(path.startswith(prefix) for prefix in webdav_prefixes) for path in sample_files[:3])
                      
                     # 针对原盘目录（大量小文件）使用更激进的初始线程数策略
                     if has_disc_files:
@@ -1474,7 +1460,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
     def _snapshot_wrapper():
         result = _generate_snapshot_core()
         execution_time = time.time() - snapshot_start_time
-        logger.logger.debug(f"_generate_snapshot_core 执行完成，返回值: {result}，耗时: {execution_time:.2f}秒")
+        logger.debug(f"_generate_snapshot_core 执行完成，返回值: {result}，耗时: {execution_time:.2f}秒")
         return result
     
     # 使用run_with_timeout执行核心逻辑，应用传入的timeout参数
@@ -1490,7 +1476,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
     # 这解决了超时检测机制误报的问题
     if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
         output_size = os.path.getsize(output_file)
-        logger.logger.info(f"快照文件实际存在且大小有效: {output_file}, 大小: {output_size} bytes")
+        logger.info(f"快照文件实际存在且大小有效: {output_file}, 大小: {output_size} bytes")
         
         # 如果系统报告超时但文件已存在，覆盖结果为成功
         if result == -ERROR_TIMEOUT:
@@ -1501,17 +1487,17 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     content = f.read()
                     if content:
                         file_count = len(content.split(b'\x00')) - 1  # 减去最后的空分隔符
-                        logger.logger.info(f"快照文件包含 {file_count} 个文件记录")
+                        logger.info(f"快照文件包含 {file_count} 个文件记录")
                         result = file_count  # 返回实际的文件数量
             except Exception as e:
-                logger.logger.error(f"尝试读取已生成的快照文件失败: {str(e)}")
+                logger.error(f"尝试读取已生成的快照文件失败: {str(e)}")
     # 只有当快照文件不存在或为空且结果是超时时，才记录错误
     elif result == -ERROR_TIMEOUT:
         result = -handle_error(ERROR_TIMEOUT, f"生成快照超时（{timeout}秒）")
     
     # 记录最终结果和执行时间
     execution_time = time.time() - snapshot_start_time
-    logger.logger.debug(f"generate_snapshot 函数执行完成，最终返回值: {result}，总耗时: {execution_time:.2f}秒")
+    logger.debug(f"generate_snapshot 函数执行完成，最终返回值: {result}，总耗时: {execution_time:.2f}秒")
     
     return result
 

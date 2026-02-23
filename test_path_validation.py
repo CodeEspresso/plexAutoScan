@@ -52,7 +52,7 @@ def test_path_validation():
     
     # 尝试使用有效路径生成快照
     if is_valid:
-        snapshot_path, snapshot_content, is_success = snapshot_manager.generate_snapshot(
+        snapshot_path, snapshot_content, is_success, added_files = snapshot_manager.generate_snapshot(
             valid_prod_path, 
             test_env=is_test_env
         )
@@ -60,9 +60,10 @@ def test_path_validation():
         if is_success:
             logger.info(f"快照文件路径: {snapshot_path}")
             logger.info(f"快照文件数量: {len(snapshot_content.get('files', []))}")
+            logger.info(f"新增文件数量: {len(added_files)}")
     
     # 尝试使用无效路径生成快照
-    snapshot_path, snapshot_content, is_success = snapshot_manager.generate_snapshot(
+    snapshot_path, snapshot_content, is_success, added_files = snapshot_manager.generate_snapshot(
         invalid_test_path, 
         test_env=is_test_env
     )

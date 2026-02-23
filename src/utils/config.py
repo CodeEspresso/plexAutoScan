@@ -79,7 +79,15 @@ class Config:
             try:
                 # 使用纯Python解析，避免命令注入风险
                 with open(file_path, 'r', encoding='utf-8') as f:
-                    for line in f:
+                    # 先读取整个文件内容
+                    content = f.read()
+                    
+                    # 处理反斜杠换行（将 \ 后跟换行符的情况合并）
+                    # 变更理由：配置文件可能使用反斜杠换行来分割长路径，需要正确处理
+                    content = re.sub(r'\\\s*\n\s*', ' ', content)
+                    
+                    # 按行处理
+                    for line in content.split('\n'):
                         line = line.strip()
                         
                         # 跳过注释和空行
@@ -175,13 +183,12 @@ class Config:
         # 默认值配置
         defaults = {
             'DEBUG': '0',
-            'TEST_ENV': '0',
             'ENABLE_PLEX': '1',
             'WAIT_FOR_SCAN_COMPLETION': '0',
             'SCAN_TIMEOUT': '300',
             'MIN_FILE_SIZE_MB': '10',
             'MAX_FILES_PER_SCAN': '500',
-            'SMB_MAX_WORKERS': '5',  # SMB连接的最大并行线程数，默认为3以避免连接过载
+            'SMB_MAX_WORKERS': '10',  # SMB连接的最大并行线程数
             'ENABLE_DIRECTORY_MERGING': '1',  # 是否启用目录合并功能
             'MAX_DIRECTORY_DEPTH': '5',  # 目录合并的最大深度
         }
@@ -211,6 +218,31 @@ class Config:
         value = self.get(key, str(default))
         return value.lower() in ('true', 'yes', '1', 'y', 't')
     
+    def get_list(self, key, default=None):
+        """获取列表类型的配置项（支持空格、逗号、分号分隔）
+        
+        Args:
+            key (str): 配置项名称
+            default (list): 默认值
+            
+        Returns:
+            list: 配置项列表
+        """
+        if default is None:
+            default = []
+        
+        value = self.get(key, '')
+        if not value:
+            return default
+        
+        # 支持多种分隔符
+        for separator in [',', ';', '\n', ' ']:
+            if separator in value:
+                return [item.strip() for item in value.split(separator) if item.strip()]
+        
+        # 如果没有分隔符，返回单个元素的列表
+        return [value.strip()] if value.strip() else default
+    
     def validate(self):
         """验证配置有效性"""
         self.logger.info("验证配置...")
@@ -235,7 +267,6 @@ class Config:
         # 输出配置摘要
         self.logger.debug("配置摘要:")
         self.logger.debug(f"  调试模式: {'开启' if self.debug else '关闭'}")
-        self.logger.debug(f"  测试环境: {'开启' if self.is_test_env else '关闭'}")
         self.logger.debug(f"  Docker环境: {'是' if self.is_docker else '否'}")
         self.logger.debug(f"  启用Plex: {'是' if self.enable_plex else '否'}")
         if self.enable_plex:
@@ -257,11 +288,6 @@ class Config:
         return self.get_bool('DEBUG', False)
     
     @property
-    def is_test_env(self):
-        """是否为测试环境"""
-        return self.get_bool('TEST_ENV', False)
-    
-    @property
     def is_docker(self):
         """是否在Docker环境中"""
         return env_detector.is_docker()
@@ -269,53 +295,10 @@ class Config:
     @property
     def enable_plex(self):
         """是否启用Plex集成"""
-        # 根据_set_defaults中的设置，ENABLE_PLEX默认为'1'，所以这里也应该默认返回True
         return self.get_bool('ENABLE_PLEX', True)
     
     def get_mount_paths(self):
         """获取挂载路径列表"""
-        # 检查是否为测试环境
-        if self.is_test_env:
-            # 测试环境返回测试路径
-            test_base_path = self.get('TEST_BASE_PATH', '')
-            if test_base_path and os.path.exists(test_base_path):
-                # 返回TEST_BASE_PATH下的所有子目录作为挂载点
-                subdirs = []
-                try:
-                    for item in os.listdir(test_base_path):
-                        item_path = os.path.join(test_base_path, item)
-                        if os.path.isdir(item_path):
-                            subdirs.append(item_path)
-                    # 如果没有子目录，返回TEST_BASE_PATH本身
-                    if not subdirs and os.path.isdir(test_base_path):
-                        subdirs.append(test_base_path)
-                    return subdirs
-                except Exception as e:
-                    self.logger.error(f"读取测试路径失败: {str(e)}")
-                    return [test_base_path]
-            # 如果TEST_BASE_PATH不存在，使用固定的测试路径
-            fixed_test_path = '/Volumes/PSSD/项目/plexAutoScan/test_files'
-            if os.path.exists(fixed_test_path):
-                self.logger.warning(f"TEST_BASE_PATH不存在，使用固定测试路径: {fixed_test_path}")
-                # 返回fixed_test_path下的所有子目录作为挂载点
-                subdirs = []
-                try:
-                    for item in os.listdir(fixed_test_path):
-                        item_path = os.path.join(fixed_test_path, item)
-                        if os.path.isdir(item_path):
-                            subdirs.append(item_path)
-                    # 如果没有子目录，返回fixed_test_path本身
-                    if not subdirs and os.path.isdir(fixed_test_path):
-                        subdirs.append(fixed_test_path)
-                    return subdirs
-                except Exception as e:
-                    self.logger.error(f"读取固定测试路径失败: {str(e)}")
-                    return [fixed_test_path]
-            # 如果都不存在，返回空列表
-            self.logger.error("测试路径不存在")
-            return []
-        
-        # 生产环境优先使用MOUNT_PATHS配置
         mount_paths_str = self.get('MOUNT_PATHS', '')
         if mount_paths_str:
             # 支持多种分隔符
@@ -331,55 +314,6 @@ class Config:
             
             # 清理并过滤空路径
             return [path.strip() for path in paths if path.strip()]
-        
-        # 如果MOUNT_PATHS未配置，再检查是否在Docker环境中
-        if self.is_docker:
-            # Docker环境中使用PROD_BASE_PATH（如果配置了）
-            prod_base_path = self.get('PROD_BASE_PATH', '')
-            if prod_base_path:
-                # 如果PROD_BASE_PATH是单个路径，直接返回
-                if prod_base_path.strip() and not any(sep in prod_base_path for sep in [',', ';', '\n', ' ']):
-                    # 飞牛OS特定处理：对于/vol02/CloudDrive/WebDAV路径，采用更宽松的处理方式
-                    if prod_base_path.startswith('/vol02/CloudDrive/WebDAV'):
-                        self.logger.debug(f"飞牛OS Docker环境：特殊处理基础路径 {prod_base_path}")
-                        
-                        # 对于飞牛OS，我们假设路径是有效的，直接返回
-                        # 这是因为飞牛OS作为NAS系统，挂载点可能需要更长时间来准备
-                        return [prod_base_path]
-                    
-                    # 其他Docker环境的常规处理
-                    try:
-                        if os.path.exists(prod_base_path):
-                            subdirs = []
-                            # 使用超时控制来防止目录遍历卡死
-                            def list_dir_safely():
-                                for item in os.listdir(prod_base_path):
-                                    try:
-                                        item_path = os.path.join(prod_base_path, item)
-                                        if os.path.isdir(item_path):
-                                            subdirs.append(item_path)
-                                    except Exception as e:
-                                        self.logger.warning(f"无法访问目录项 {item}: {str(e)}")
-
-                            # 飞牛OS优化：延长超时时间到60秒
-                            timeout_seconds = 60
-                            run_with_timeout(
-                                list_dir_safely,
-                                timeout_seconds=timeout_seconds,
-                                logger=self.logger,
-                                operation_name=f"遍历目录 {prod_base_path}"
-                            )
-                            # 如果成功获取到子目录，返回子目录列表
-                            if subdirs:
-                                return subdirs
-                            # 如果没有获取到子目录（可能是空目录或遍历超时），返回PROD_BASE_PATH本身
-                            self.logger.warning(f"未找到PROD_BASE_PATH子目录，返回PROD_BASE_PATH本身")
-                            return [prod_base_path]
-                    except Exception as e:
-                        self.logger.error(f"获取PROD_BASE_PATH子目录失败: {str(e)}")
-                        # 发生异常时也返回PROD_BASE_PATH本身作为回退
-                        return [prod_base_path]
-                # 否则按分隔符处理
         
         # 如果都没有配置，返回空列表
         self.logger.warning("MOUNT_PATHS未配置，无法处理任何目录")

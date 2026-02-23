@@ -99,13 +99,36 @@ class PlexAutoScan:
         self.success_count = 0
         self.failure_count = 0
         self.skipped_count = 0
+        
+        # 守护模式配置
+        self.daemon_mode = self.config.get('DAEMON_MODE', '1') == '1'
+        self.check_interval = int(self.config.get('CHECK_INTERVAL', '600'))
+        self.skipped_directories = []
+        self._shutdown_requested = False
+    
+    def _setup_signal_handlers(self):
+        """设置信号处理器，支持优雅退出"""
+        import signal
+        def signal_handler(signum, frame):
+            self.logger.info(f"收到信号 {signum}，准备优雅退出...")
+            self._shutdown_requested = True
+        
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+        self.logger.debug("信号处理器已设置")
     
     def run(self):
         """运行PlexAutoScan主程序"""
         self.logger.info("=== PlexAutoScan 启动 ===")
         
-        # 记录启动时间
-        start_time = time.time()
+        # 设置信号处理器
+        self._setup_signal_handlers()
+        
+        # 显示运行模式
+        if self.daemon_mode:
+            self.logger.info(f"运行模式: 守护模式，检查间隔: {self.check_interval}秒")
+        else:
+            self.logger.info("运行模式: 单次运行")
         
         # 收集环境信息
         self.logger.info(f"环境信息: DOCKER_ENV={os.environ.get('DOCKER_ENV', '0')}, DEBUG={self.debug}")
@@ -122,102 +145,137 @@ class PlexAutoScan:
         except (ValueError, TypeError):
             self.logger.warning(f"无效的最小文件大小配置: {min_file_size_mb}，使用默认值10MB")
         
-        try:
-            # 移动到前面的代码已处理Python版本检查
-            
-            # 检查依赖
-            self.logger.info("正在检查依赖...")
-            dependency_check = self.dependency_manager.check_all_dependencies()
-            
-            if not dependency_check['success']:
-                # 尝试自动安装缺失的依赖
-                self.logger.warning("核心依赖缺失，尝试自动安装...")
-                missing_deps = self.dependency_manager.get_missing_core_dependencies()
-                if missing_deps:
-                    self.logger.info(f"开始安装缺失的依赖: {', '.join(missing_deps)}")
-                    
-                    # 先尝试清理pip缓存
-                    try:
-                        self.logger.debug("尝试清理pip缓存...")
-                        subprocess.run(
-                            [sys.executable, '-m', 'pip', 'cache', 'purge'],
-                            capture_output=True,
-                            text=True
-                        )
-                    except Exception as e:
-                        self.logger.warning(f"清理pip缓存失败: {str(e)}")
-                    
-                    install_success = self.dependency_manager.install_python_dependencies()
-                    if not install_success:
-                        self.logger.error("依赖安装失败，尝试修复模式继续运行")
-                        # 尝试以修复模式运行，只使用可用的功能
-                        if self._try_repair_mode():  # 新增: 尝试修复模式
-                            self.logger.warning("进入修复模式继续运行")
-                        else:
-                            self.logger.error("无法进入修复模式，程序无法继续运行")
-                            return False
-                    # 重新检查依赖
-                    self.logger.info("依赖安装完成，重新检查...")
-                    dependency_check = self.dependency_manager.check_all_dependencies()
-                    if not dependency_check['success']:
-                        self.logger.error("依赖安装后仍有缺失，尝试识别关键依赖")
-                        # 检查是否有关键依赖缺失
-                        critical_missing = [dep for dep in ['pysmb'] if dep in self.dependency_manager.get_missing_core_dependencies()]
-                        if critical_missing:
-                            self.logger.error(f"关键依赖缺失: {', '.join(critical_missing)}，程序无法继续运行")
-                            return False
-                        else:
-                            self.logger.warning("非关键依赖缺失，尝试以降级模式继续运行")
-            
-            # 检查Python版本
-            self.logger.info("正在检查Python版本...")
-            if not self.dependency_manager.check_python_version((3, 8, 0)):
-                self.logger.warning("Python版本可能不兼容，可能会出现问题")
-            
-            # 加载配置
-            self.logger.info("正在加载配置...")
-            
-            # 清理旧快照
-            self.logger.info("正在清理旧快照...")
-            self.snapshot_manager.clean_old_snapshots(
-                max_age_days=self.config.get('SNAPSHOT_RETENTION_DAYS', 7),
-                max_count=self.config.get('MAX_SNAPSHOTS', 10)
-            )
-            
-            # 更新媒体库缓存
-            if self.library_manager:
-                self.logger.info("正在更新媒体库缓存...")
-                self.library_manager.refresh_libraries()
-            else:
-                self.logger.warning("媒体库管理器不可用，跳过媒体库缓存更新")
-            
-            # 获取需要处理的目录列表
-            directories = self._get_directories_to_process()
-            
-            if not directories:
-                self.logger.warning("没有找到需要处理的目录")
-            else:
-                self.logger.info(f"找到{len(directories)}个需要处理的目录")
-                
-                # 处理目录
-                self._process_directories(directories)
-        except Exception as e:
-            self.logger.error(f"程序运行出错: {str(e)}")
-            import traceback
-            self.logger.error(f"错误堆栈: {traceback.format_exc()}")
-            return False
-        finally:
-            # 计算耗时
-            elapsed_time = time.time() - start_time
-            
-            # 打印统计信息
-            self.logger.info("=== 运行统计 ===")
-            self.logger.info(f"成功处理: {self.success_count}")
-            self.logger.info(f"处理失败: {self.failure_count}")
-            self.logger.info(f"已跳过: {self.skipped_count}")
-            self.logger.info(f"总耗时: {elapsed_time:.2f}秒")
-            self.logger.info("=== PlexAutoScan 结束 ===")
+        # 检查依赖
+        self.logger.info("正在检查依赖...")
+        dependency_check = self.dependency_manager.check_all_dependencies()
         
+        if not dependency_check['success']:
+            # 尝试自动安装缺失的依赖
+            self.logger.warning("核心依赖缺失，尝试自动安装...")
+            missing_deps = self.dependency_manager.get_missing_core_dependencies()
+            if missing_deps:
+                self.logger.info(f"开始安装缺失的依赖: {', '.join(missing_deps)}")
+                
+                # 先尝试清理pip缓存
+                try:
+                    self.logger.debug("尝试清理pip缓存...")
+                    subprocess.run(
+                        [sys.executable, '-m', 'pip', 'cache', 'purge'],
+                        capture_output=True,
+                        text=True
+                    )
+                except Exception as e:
+                    self.logger.warning(f"清理pip缓存失败: {str(e)}")
+                
+                install_success = self.dependency_manager.install_python_dependencies()
+                if not install_success:
+                    self.logger.error("依赖安装失败，尝试修复模式继续运行")
+                    if self._try_repair_mode():
+                        self.logger.warning("进入修复模式继续运行")
+                    else:
+                        self.logger.error("无法进入修复模式，程序无法继续运行")
+                        return False
+                # 重新检查依赖
+                self.logger.info("依赖安装完成，重新检查...")
+                dependency_check = self.dependency_manager.check_all_dependencies()
+                if not dependency_check['success']:
+                    self.logger.error("依赖安装后仍有缺失，尝试识别关键依赖")
+                    critical_missing = [dep for dep in ['pysmb'] if dep in self.dependency_manager.get_missing_core_dependencies()]
+                    if critical_missing:
+                        self.logger.error(f"关键依赖缺失: {', '.join(critical_missing)}，程序无法继续运行")
+                        return False
+                    else:
+                        self.logger.warning("非关键依赖缺失，尝试以降级模式继续运行")
+        
+        # 检查Python版本
+        self.logger.info("正在检查Python版本...")
+        if not self.dependency_manager.check_python_version((3, 8, 0)):
+            self.logger.warning("Python版本可能不兼容，可能会出现问题")
+        
+        # 守护循环
+        cycle_count = 0
+        while True:
+            cycle_count += 1
+            cycle_start_time = time.time()
+            
+            if self.daemon_mode:
+                self.logger.info(f"=== 开始第 {cycle_count} 次扫描周期 ===")
+            
+            try:
+                # 加载配置
+                self.logger.info("正在加载配置...")
+                
+                # 清理旧快照
+                self.logger.info("正在清理旧快照...")
+                self.snapshot_manager.clean_old_snapshots(
+                    max_age_days=self.config.get('SNAPSHOT_RETENTION_DAYS', 7),
+                    max_count=self.config.get('MAX_SNAPSHOTS', 10)
+                )
+                
+                # 更新媒体库缓存
+                if self.library_manager:
+                    self.logger.info("正在更新媒体库缓存...")
+                    self.library_manager.refresh_libraries()
+                else:
+                    self.logger.warning("媒体库管理器不可用，跳过媒体库缓存更新")
+                
+                # 获取需要处理的目录列表
+                directories = self._get_directories_to_process()
+                
+                if not directories:
+                    self.logger.warning("没有找到需要处理的目录")
+                else:
+                    self.logger.info(f"找到{len(directories)}个需要处理的目录")
+                    
+                    # 处理目录
+                    self._process_directories(directories)
+                
+                # 计算本次周期耗时
+                cycle_elapsed = time.time() - cycle_start_time
+                
+                # 打印本次周期统计
+                self.logger.info(f"=== 第 {cycle_count} 次扫描周期统计 ===")
+                self.logger.info(f"成功处理: {self.success_count}")
+                self.logger.info(f"处理失败: {self.failure_count}")
+                self.logger.info(f"已跳过: {self.skipped_count}")
+                self.logger.info(f"跳过的目录: {len(self.skipped_directories)}")
+                self.logger.info(f"本次耗时: {cycle_elapsed:.2f}秒")
+                
+            except Exception as e:
+                self.logger.error(f"扫描周期出错: {str(e)}")
+                import traceback
+                self.logger.error(f"错误堆栈: {traceback.format_exc()}")
+            
+            # 检查是否请求退出
+            if self._shutdown_requested:
+                self.logger.info("收到退出请求，结束运行")
+                break
+            
+            # 非守护模式则退出
+            if not self.daemon_mode:
+                self.logger.info("单次运行模式，退出程序")
+                break
+            
+            # 守护模式：等待下次检查
+            self.logger.info(f"等待 {self.check_interval} 秒后进行下次检查...")
+            
+            # 分段等待，以便响应退出信号
+            wait_remaining = self.check_interval
+            while wait_remaining > 0 and not self._shutdown_requested:
+                wait_time = min(10, wait_remaining)
+                time.sleep(wait_time)
+                wait_remaining -= wait_time
+            
+            if self._shutdown_requested:
+                self.logger.info("收到退出请求，结束运行")
+                break
+            
+            # 重置计数器
+            self.success_count = 0
+            self.failure_count = 0
+            self.skipped_count = 0
+        
+        self.logger.info("=== PlexAutoScan 结束 ===")
         return True
         
     def _try_repair_mode(self):
@@ -290,16 +348,26 @@ class PlexAutoScan:
         # 使用Config类提供的get_mount_paths方法获取目录列表
         directories = self.config.get_mount_paths()
         
+        # 调试：打印原始目录列表
+        self.logger.info(f"原始目录列表数量: {len(directories)}")
+        for i, d in enumerate(directories):
+            self.logger.debug(f"  原始目录[{i}]: [{d}]")
+        
         # 去重和规范化
         normalized_dirs = []
         
         for directory in directories:
             if directory:
                 norm_dir = normalize_path(directory)
+                self.logger.debug(f"规范化: [{directory}] -> [{norm_dir}]")
                 if norm_dir and norm_dir not in normalized_dirs:
                     normalized_dirs.append(norm_dir)
+                elif not norm_dir:
+                    self.logger.warning(f"规范化后为空，跳过: [{directory}]")
         
-        self.logger.debug(f"获取到{len(normalized_dirs)}个需要处理的目录")
+        self.logger.info(f"获取到{len(normalized_dirs)}个需要处理的目录")
+        for i, d in enumerate(normalized_dirs):
+            self.logger.info(f"  处理目录[{i}]: [{d}]")
         return normalized_dirs
     
     def _process_directories(self, directories):
@@ -308,41 +376,77 @@ class PlexAutoScan:
         Args:
             directories (list): 目录路径列表
         """
+        # 记录所有无效路径的详细信息
+        invalid_paths = []
+        
+        # 优先检查之前跳过的目录是否已恢复
+        if self.skipped_directories:
+            self.logger.info(f"检查 {len(self.skipped_directories)} 个之前跳过的目录是否已恢复...")
+            recovered_dirs = []
+            for skipped_dir in self.skipped_directories[:]:
+                verified_dir, is_valid = verify_path(skipped_dir)
+                if is_valid:
+                    self.logger.info(f"目录已恢复: {skipped_dir}")
+                    recovered_dirs.append(verified_dir)
+                    self.skipped_directories.remove(skipped_dir)
+            
+            if recovered_dirs:
+                self.logger.info(f"发现 {len(recovered_dirs)} 个恢复的目录，优先处理")
+                for recovered_dir in recovered_dirs:
+                    try:
+                        result = self._process_directory(recovered_dir)
+                        if result:
+                            self.success_count += 1
+                            self.logger.info(f"恢复的目录 {recovered_dir} 处理成功")
+                        else:
+                            self.logger.warning(f"恢复的目录 {recovered_dir} 处理完成但没有更新媒体库")
+                            self.success_count += 1
+                    except Exception as e:
+                        self.logger.error(f"处理恢复的目录失败 {recovered_dir}: {str(e)}")
+                        self.failure_count += 1
+        
         # 检查是否有可用的目录
         any_valid_dir = False
         for directory in directories:
             # 验证目录
-            # 修复: 正确转换TEST_ENV为布尔值
-            test_env_value = self.config.get('TEST_ENV', False)
-            is_test_env = str(test_env_value).lower() in ('true', 'yes', '1', 'y', 't')
-            
-            verified_dir, is_valid = verify_path(directory, is_test_env)
+            verified_dir, is_valid = verify_path(directory)
             
             if not is_valid:
-                self.logger.warning(f"跳过无效目录: {directory}")
+                self.logger.warning(f"跳过无效目录: {directory} (验证结果: {verified_dir})")
+                invalid_paths.append(f"{directory} -> {verified_dir}")
                 self.skipped_count += 1
+                # 记录跳过的目录，以便下次检查
+                if directory not in self.skipped_directories:
+                    self.skipped_directories.append(directory)
                 continue
             
             any_valid_dir = True
             break
         
-        # 如果没有可用的目录，记录警告并退出，让容器按现有配置重试
+        # 如果没有可用的目录，记录详细警告并退出
         if not any_valid_dir:
-            self.logger.warning(f"所有目录都不可用，将在10分钟后重试")
+            self.logger.error("=" * 60)
+            self.logger.error("所有目录都不可用！")
+            self.logger.error(f"配置的目录数量: {len(directories)}")
+            self.logger.error(f"无效路径详情:")
+            for invalid_path in invalid_paths:
+                self.logger.error(f"  - {invalid_path}")
+            self.logger.error("=" * 60)
+            if self.daemon_mode:
+                self.logger.warning(f"将在 {self.check_interval} 秒后重试")
             return
         
         # 处理可用的目录
         for directory in directories:
             # 验证目录
-            # 修复: 正确转换TEST_ENV为布尔值
-            test_env_value = self.config.get('TEST_ENV', False)
-            is_test_env = str(test_env_value).lower() in ('true', 'yes', '1', 'y', 't')
-            
-            verified_dir, is_valid = verify_path(directory, is_test_env)
+            verified_dir, is_valid = verify_path(directory)
             
             if not is_valid:
                 self.logger.warning(f"跳过无效目录: {directory}")
                 self.skipped_count += 1
+                # 记录跳过的目录，以便下次检查
+                if directory not in self.skipped_directories:
+                    self.skipped_directories.append(directory)
                 continue
             
             # 处理目录
@@ -378,50 +482,49 @@ class PlexAutoScan:
         # 定义核心处理逻辑函数，用于超时控制
         def _process_directory_core():
             try:
-                # 生成目录快照 - 传递test_env参数
-                test_env_value = self.config.get('TEST_ENV', False)
-                is_test_env = str(test_env_value).lower() in ('true', 'yes', '1', 'y', 't')
-
-                snapshot_path, snapshot_content, is_success = self.snapshot_manager.generate_snapshot(
-                    directory, 
-                    test_env=is_test_env
+                # 生成目录快照并获取新增文件列表
+                # 变更理由：使用新增文件列表判断是否触发Plex扫描，比"首次扫描"标志更可靠
+                snapshot_path, snapshot_content, is_success, added_files = self.snapshot_manager.generate_snapshot(
+                    directory
                 )
 
                 if not is_success:
                     self.logger.error(f"生成快照过程中出现问题: {directory}")
-                    # 即使生成快照失败，也检查是否有可用的文件数据
                     if not snapshot_content or not snapshot_content.get('files'):
                         self.logger.warning("没有可用的文件数据，跳过媒体库更新")
-                        return False  # 返回False表示处理失败但不抛出异常
+                        return False
+
+                # 如果没有新增文件，跳过 Plex 扫描
+                if not added_files:
+                    self.logger.info(f"目录 {directory} 无新增文件，跳过 Plex 媒体库扫描")
+                    return True
+
+                self.logger.info(f"目录 {directory} 发现 {len(added_files)} 个新增文件，准备触发 Plex 扫描")
 
                 # 获取最小文件大小配置
                 min_file_size_mb = self.config.get('MIN_FILE_SIZE_MB', 10)
                 try:
                     min_file_size_mb_val = float(min_file_size_mb)
-                    min_file_size_bytes = min_file_size_mb_val * 1024 * 1024  # 转换为字节
+                    min_file_size_bytes = min_file_size_mb_val * 1024 * 1024
                 except (ValueError, TypeError):
-                    min_file_size_bytes = 10 * 1024 * 1024  # 默认10MB
+                    min_file_size_bytes = 10 * 1024 * 1024
                 
-                # 过滤小文件
-                filtered_files = []
-                for file_info in snapshot_content.get('files', []):
-                    file_size = file_info.get('size', 0)
-                    file_path = file_info.get('path', '')
-                    
-                    # 应用最小文件大小阈值
-                    if file_size >= min_file_size_bytes:
-                        # 额外检查文件路径是否有效
-                        if file_path and isinstance(file_path, str):
-                            filtered_files.append(file_info)
-                        else:
-                            self.logger.warning(f"跳过无效文件路径: {file_info}")
-                         
-                self.logger.info(f"过滤后文件数量: {len(filtered_files)}")
+                # 过滤新增文件中的小文件
+                filtered_added_files = []
+                for file_path in added_files:
+                    try:
+                        if os.path.exists(file_path):
+                            file_size = os.path.getsize(file_path)
+                            if file_size >= min_file_size_bytes:
+                                filtered_added_files.append(file_path)
+                    except Exception as e:
+                        self.logger.warning(f"检查文件失败 {file_path}: {str(e)}")
                 
-                # 如果没有有效文件，记录警告并返回
-                if not filtered_files:
-                    self.logger.warning(f"目录 {directory} 中没有符合条件的文件")
-                    return False
+                self.logger.info(f"过滤后新增文件数量: {len(filtered_added_files)}")
+                
+                if not filtered_added_files:
+                    self.logger.warning(f"新增文件均小于 {min_file_size_mb} MB，跳过媒体库更新")
+                    return True
 
                 # 更新媒体库
                 self.logger.info(f"准备更新媒体库: library_manager={self.library_manager is not None}")
@@ -430,11 +533,10 @@ class PlexAutoScan:
                     is_initialized = self.library_manager.is_initialized()
                     self.logger.info(f"媒体库管理器初始化状态: {is_initialized}")
                     if is_initialized:
-                        self.logger.info(f"正在触发Plex媒体库扫描... 目录={directory}, 文件数量={len(filtered_files)}")
-                        # 传递所有过滤后的文件给Plex更新
+                        self.logger.info(f"正在触发Plex媒体库扫描... 目录={directory}, 新增文件数量={len(filtered_added_files)}")
                         updated_files_count = self.library_manager.update_library_with_files(
                             directory, 
-                            [file_info['path'] for file_info in filtered_files]
+                            filtered_added_files
                         )
                         if updated_files_count > 0:
                             self.logger.info(f"✅ 媒体库扫描已触发，将处理 {updated_files_count} 个文件")
@@ -445,7 +547,6 @@ class PlexAutoScan:
                 else:
                     self.logger.warning("媒体库管理器不可用，跳过媒体库更新")
 
-                # 记录耗时
                 elapsed_time = time.time() - start_time
                 self.logger.info(f"目录 {directory} 处理完成，耗时 {elapsed_time:.2f} 秒")
                 return True
