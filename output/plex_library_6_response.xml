@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer size="5" allowSync="1" art="/:/resources/show-fanart.jpg" content="secondary" identifier="com.plexapp.plugins.library" librarySectionID="6" librarySectionTitle="&#26085;&#38889;&#21095;" librarySectionUUID="bd3f69fa-3c7b-4bd3-b753-df38d4a0709a" mediaTagPrefix="/system/bundle/media/flags/" mediaTagVersion="1751534299" nocache="1" thumb="/:/resources/show.png" title1="&#26085;&#38889;&#21095;" title2="All Shows" viewGroup="show">
+<Directory ratingKey="9340" key="/library/metadata/9340/children" guid="plex://show/6155e0a6633135738d542318" slug="gyeongseong-creature" studio="Story &amp; Pictures Media" type="show" title="&#20140;&#22478;&#24618;&#29289;" originalTitle="&#44221;&#49457;&#53356;&#47532;&#52376;" contentRating="TV-MA" contentRatingAge="15" summary="1945 &#24180;&#30340;&#20140;&#22478;&#65292;2024 &#24180;&#30340;&#39318;&#23572;&#12290;&#20026;&#20102;&#27714;&#29983;&#65292;&#22312;&#26102;&#38388;&#20013;&#28418;&#27969;&#30340;&#20004;&#20154;&#22859;&#21147;&#25269;&#25239;&#22240;&#20154;&#31867;&#36138;&#23146;&#32780;&#29983;&#30340;&#24618;&#29289;&#12290;" index="1" audienceRating="8.0" year="2023" tagline="There were humans and creatures in a hospital of Gyeongseong" thumb="/library/metadata/9340/thumb/1754366273" art="/library/metadata/9340/art/1754366273" duration="3600000" originallyAvailableAt="2023-12-22" leafCount="17" viewedLeafCount="0" childCount="2" addedAt="1754366155" updatedAt="1754366273" audienceRatingImage="themoviedb://image.rating" primaryExtraKey="/library/metadata/9370">
+<Image alt="&#20140;&#22478;&#24618;&#29289;" type="coverPoster" url="/library/metadata/9340/thumb/1754366273" />
+<Image alt="&#20140;&#22478;&#24618;&#29289;" type="background" url="/library/metadata/9340/art/1754366273" />
+<UltraBlurColors topLeft="52170b" topRight="ac1b1f" bottomRight="1d0607" bottomLeft="0a020f" />
+<Genre tag="&#21095;&#24773;" />
+<Genre tag="&#24748;&#30097;" />
+<Country tag="Republic of Korea" />
+<Role tag="Park Seo-jun" />
+<Role tag="Han So-hee" />
+<Role tag="Kim Hae-sook" />
+</Directory>
+<Directory ratingKey="9360" key="/library/metadata/9360/children" guid="plex://show/631c2bbf42c911e4031aa555" slug="parasyte-the-gray" studio="Climax Studios" type="show" title="&#23492;&#29983;&#20861;&#65306;&#28784;&#33394;&#37096;&#38431;" originalTitle="&#44592;&#49373;&#49688;: &#45908; &#44536;&#47112;&#51060;" contentRating="TV-MA" contentRatingAge="15" summary="&#19981;&#26126;&#23492;&#29983;&#29983;&#29289;&#20982;&#29408;&#22320;&#25511;&#21046;&#20154;&#31867;&#23487;&#20027;&#24182;&#33719;&#24471;&#21147;&#37327;&#65292;&#20154;&#31867;&#24517;&#39035;&#22859;&#36215;&#23545;&#25239;&#36825;&#19968;&#26085;&#30410;&#20005;&#23803;&#30340;&#23041;&#32961;&#12290;" index="1" audienceRating="7.5" year="2024" tagline="&#23492;&#29983;&#20861;&#23601;&#34255;&#22312;&#20320;&#25105;&#36523;&#36793;" thumb="/library/metadata/9360/thumb/1754366294" art="/library/metadata/9360/art/1754366294" duration="3000000" originallyAvailableAt="2024-04-05" leafCount="6" viewedLeafCount="6" childCount="1" addedAt="1754366213" updatedAt="1754366294" audienceRatingImage="themoviedb://image.rating" primaryExtraKey="/library/metadata/9372">
+<Image alt="&#23492;&#29983;&#20861;&#65306;&#28784;&#33394;&#37096;&#38431;" type="coverPoster" url="/library/metadata/9360/thumb/1754366294" />
+<Image alt="&#23492;&#29983;&#20861;&#65306;&#28784;&#33394;&#37096;&#38431;" type="background" url="/library/metadata/9360/art/1754366294" />
+<Image alt="&#23492;&#29983;&#20861;&#65306;&#28784;&#33394;&#37096;&#38431;" type="clearLogo" url="/library/metadata/9360/clearLogo/1754366294" />
+<UltraBlurColors topLeft="181a1c" topRight="9d3436" bottomRight="241f1d" bottomLeft="494447" />
+<Genre tag="&#21095;&#24773;" />
+<Genre tag="Action" />
+<Country tag="Republic of Korea" />
+<Role tag="Jeon So-nee" />
+<Role tag="Koo Kyo-hwan" />
+<Role tag="Lee Jung-hyun" />
+</Directory>
+<Directory ratingKey="9330" key="/library/metadata/9330/children" guid="plex://show/5e16253691c20300412003a8" slug="alice-in-borderland-2020" studio="Robot Communications" type="show" title="&#24357;&#30041;&#20043;&#22269;&#30340;&#29233;&#20029;&#19997;" originalTitle="&#20170;&#38555;&#12398;&#22269;&#12398;&#12450;&#12522;&#12473;" contentRating="TV-MA" contentRatingAge="16" summary="&#19968;&#20301;&#28459;&#26080;&#30446;&#26631;&#30340;&#28216;&#25103;&#29609;&#23478;&#21644;&#20004;&#20301;&#22909;&#21451;&#21457;&#29616;&#20182;&#20204;&#36523;&#22788;&#24179;&#34892;&#19990;&#30028;&#20013;&#30340;&#19996;&#20140;&#12290;&#20026;&#20102;&#29983;&#23384;&#19979;&#26469;&#65292;&#20182;&#20204;&#24517;&#39035;&#22312;&#19968;&#31995;&#21015;&#27531;&#24525;&#30340;&#28216;&#25103;&#20013;&#23637;&#24320;&#36739;&#37327;&#12290;" index="1" audienceRating="8.2" year="2020" tagline="The joker is in charge here." thumb="/library/metadata/9330/thumb/1754366261" art="/library/metadata/9330/art/1754366261" duration="3000000" originallyAvailableAt="2020-12-10" leafCount="8" viewedLeafCount="0" childCount="1" addedAt="1754366125" updatedAt="1754366261" audienceRatingImage="themoviedb://image.rating" primaryExtraKey="/library/metadata/9368">
+<Image alt="&#24357;&#30041;&#20043;&#22269;&#30340;&#29233;&#20029;&#19997;" type="coverPoster" url="/library/metadata/9330/thumb/1754366261" />
+<Image alt="&#24357;&#30041;&#20043;&#22269;&#30340;&#29233;&#20029;&#19997;" type="background" url="/library/metadata/9330/art/1754366261" />
+<Image alt="&#24357;&#30041;&#20043;&#22269;&#30340;&#29233;&#20029;&#19997;" type="clearLogo" url="/library/metadata/9330/clearLogo/1754366261" />
+<UltraBlurColors topLeft="153528" topRight="133737" bottomRight="91423b" bottomLeft="366441" />
+<Genre tag="&#21095;&#24773;" />
+<Genre tag="&#24748;&#30097;" />
+<Country tag="Japan" />
+<Role tag="Nijiro Murakami" />
+<Role tag="Aya Asahina" />
+<Role tag="Ayaka Miyoshi" />
+</Directory>
+<Directory ratingKey="7292" key="/library/metadata/7292/children" guid="plex://show/5fbe82af084b72002e3e8894" slug="sisyphus-the-myth" studio="SLL" type="show" title="&#35199;&#35199;&#24343;&#26031;&#30340;&#31070;&#35805;" originalTitle="&#49884;&#51648;&#54532;&#49828; : the myth" contentRating="Not Rated" summary="&#22825;&#25165;&#24037;&#31243;&#24072;&#20027;&#35282;&#65292;&#20154;&#31216;&#22269;&#27665;&#33521;&#38596;&#65292;&#30001;&#20110;&#26080;&#27861;&#32622;&#20449;&#21733;&#21733;&#30340;&#27515;&#20129;&#32780;&#24320;&#22987;&#35843;&#26597;&#19990;&#30028;&#20013;&#38544;&#34255;&#36523;&#20221;&#30340;&#23384;&#22312;&#32780;&#38519;&#20837;&#21361;&#38505;&#12290;&#22312;&#21478;&#19968;&#20010;&#20891;&#38400;&#21106;&#25454;&#30340;&#19990;&#30028;&#20013;&#30340;&#26368;&#24378;&#25112;&#22763;&#65292;&#20026;&#20445;&#25252;&#20027;&#35282;&#19981;&#30031;&#33392;&#38590;&#30340;&#26469;&#21040;&#21478;&#19968;&#19990;&#30028;......" index="1" audienceRating="7.1" year="2021" thumb="/library/metadata/7292/thumb/1753268492" art="/library/metadata/7292/art/1753268492" duration="4320000" originallyAvailableAt="2021-02-17" leafCount="12" viewedLeafCount="0" childCount="1" addedAt="1753268485" updatedAt="1753268492" audienceRatingImage="themoviedb://image.rating" primaryExtraKey="/library/metadata/7307">
+<Image alt="&#35199;&#35199;&#24343;&#26031;&#30340;&#31070;&#35805;" type="coverPoster" url="/library/metadata/7292/thumb/1753268492" />
+<Image alt="&#35199;&#35199;&#24343;&#26031;&#30340;&#31070;&#35805;" type="background" url="/library/metadata/7292/art/1753268492" />
+<Image alt="&#35199;&#35199;&#24343;&#26031;&#30340;&#31070;&#35805;" type="clearLogo" url="/library/metadata/7292/clearLogo/1753268492" />
+<UltraBlurColors topLeft="0a223c" topRight="105981" bottomRight="aa211f" bottomLeft="094068" />
+<Genre tag="&#21095;&#24773;" />
+<Genre tag="&#24748;&#30097;" />
+<Country tag="Republic of Korea" />
+<Role tag="Cho Seung-woo" />
+<Role tag="Park Shin-hye" />
+<Role tag="Chae Jong-hyeop" />
+</Directory>
+<Directory ratingKey="7281" key="/library/metadata/7281/children" guid="plex://show/5e1612d6c2a81f001ed363b3" slug="squid-game" studio="Siren Pictures" type="show" title="&#40063;&#40060;&#28216;&#25103;" originalTitle="&#50724;&#51669;&#50612; &#44172;&#51076;" contentRating="TV-MA" contentRatingAge="16" summary="&#25968;&#30334;&#21517;&#32463;&#27982;&#25326;&#25454;&#30340;&#20154;&#25509;&#21463;&#20102;&#19968;&#20010;&#22855;&#24618;&#30340;&#36992;&#35831;&#65292;&#21442;&#21152;&#20799;&#31461;&#28216;&#25103;&#27604;&#36187;&#12290;&#22312;&#36825;&#22330;&#28216;&#25103;&#20013;&#65292;&#26377;&#35825;&#20154;&#30340;&#22870;&#37329;&#65292;&#20063;&#26377;&#33268;&#21629;&#30340;&#39640;&#39118;&#38505;&#12290;" index="1" audienceRating="7.9" year="2021" tagline="45.6 Billion Won is Child&#39;s Play" thumb="/library/metadata/7281/thumb/1753268491" art="/library/metadata/7281/art/1753268491" theme="/library/metadata/7281/theme/1753268491" duration="3600000" originallyAvailableAt="2021-09-17" leafCount="22" viewedLeafCount="0" childCount="3" addedAt="1753268484" updatedAt="1753268491" audienceRatingImage="themoviedb://image.rating" primaryExtraKey="/library/metadata/7306">
+<Image alt="&#40063;&#40060;&#28216;&#25103;" type="coverPoster" url="/library/metadata/7281/thumb/1753268491" />
+<Image alt="&#40063;&#40060;&#28216;&#25103;" type="background" url="/library/metadata/7281/art/1753268491" />
+<Image alt="&#40063;&#40060;&#28216;&#25103;" type="clearLogo" url="/library/metadata/7281/clearLogo/1753268491" />
+<UltraBlurColors topLeft="432511" topRight="ae0540" bottomRight="1e4739" bottomLeft="a32f12" />
+<Genre tag="&#21095;&#24773;" />
+<Genre tag="&#24748;&#30097;" />
+<Country tag="Republic of Korea" />
+<Role tag="Lee Jung-jae" />
+<Role tag="Wi Ha-jun" />
+<Role tag="Jeon Young-soo" />
+</Directory>
+</MediaContainer>

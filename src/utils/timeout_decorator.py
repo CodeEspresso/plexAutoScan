@@ -6,9 +6,71 @@ import threading
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
+from .environment import env_detector
 
 # 日志配置
 logger = logging.getLogger(__name__)
+
+
+# 默认超时时间配置
+DEFAULT_TIMEOUTS = {
+    'short': 30,      # 短超时：30秒
+    'medium': 300,     # 中超时：5分钟
+    'long': 600,       # 长超时：10分钟
+    'very_long': 1800   # 超长超时：30分钟
+}
+
+
+class TimeoutConfig:
+    """超时配置类"""
+    
+    def __init__(self):
+        """初始化超时配置"""
+        self._timeouts = DEFAULT_TIMEOUTS.copy()
+        self._docker_multiplier = 0.5  # Docker 环境下的超时倍数
+    
+    def get_timeout(self, category: str = 'medium', custom_timeout: Optional[int] = None) -> int:
+        """获取超时时间
+        
+        Args:
+            category (str): 超时类别 (short, medium, long, very_long)
+            custom_timeout (int): 自定义超时时间，如果提供则忽略 category
+            
+        Returns:
+            int: 超时时间（秒）
+        """
+        if custom_timeout is not None:
+            timeout = custom_timeout
+        else:
+            timeout = self._timeouts.get(category, DEFAULT_TIMEOUTS['medium'])
+        
+        # Docker 环境下应用倍数
+        if env_detector.is_docker():
+            timeout = int(timeout * self._docker_multiplier)
+        
+        return timeout
+    
+    def set_timeout(self, category: str, timeout: int):
+        """设置超时时间
+        
+        Args:
+            category (str): 超时类别
+            timeout (int): 超时时间（秒）
+        """
+        self._timeouts[category] = timeout
+    
+    def set_docker_multiplier(self, multiplier: float):
+        """设置 Docker 环境下的超时倍数
+        
+        Args:
+            multiplier (float): 超时倍数
+        """
+        self._docker_multiplier = multiplier
+
+
+# 全局超时配置实例
+timeout_config = TimeoutConfig()
 
 
 def timeout(seconds=30, error_message="函数执行超时"):
@@ -24,11 +86,8 @@ def timeout(seconds=30, error_message="函数执行超时"):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            # 检测是否在Docker环境中运行
-            is_docker = os.environ.get('DOCKER_ENV') == '1' or os.path.exists('/.dockerenv')
-            
-            # 尊重调用者设置的超时值
-            actual_timeout = seconds
+            # 使用超时配置获取实际超时时间
+            actual_timeout = timeout_config.get_timeout(custom_timeout=seconds)
             
             # 使用ThreadPoolExecutor来执行函数
             with ThreadPoolExecutor(max_workers=1) as executor:
@@ -39,7 +98,7 @@ def timeout(seconds=30, error_message="函数执行超时"):
                     return result
                 except TimeoutError:
                     # 函数执行超时
-                    logger.error(f"函数 {func.__name__} 执行超时（{actual_timeout}秒） - Docker环境: {is_docker}")
+                    logger.error(f"函数 {func.__name__} 执行超时（{actual_timeout}秒） - Docker环境: {env_detector.is_docker()}")
                     raise TimeoutError(f"{error_message}（{actual_timeout}秒）")
         return wrapper
     return decorator
@@ -61,13 +120,10 @@ def run_with_timeout(func, *args, timeout_seconds=30, default=None, error_messag
     """
     start_time = time.time()
     try:
-        # 检测是否在Docker环境中运行
-        is_docker = os.environ.get('DOCKER_ENV') == '1' or os.path.exists('/.dockerenv')
+        # 使用超时配置获取实际超时时间
+        actual_timeout = timeout_config.get_timeout(custom_timeout=timeout_seconds)
         
-        # 尊重调用者设置的超时值
-        actual_timeout = timeout_seconds
-        
-        logger.debug(f"开始执行函数 {func.__name__}，超时设置: {actual_timeout}秒，Docker环境: {is_docker}")
+        logger.debug(f"开始执行函数 {func.__name__}，超时设置: {actual_timeout}秒，Docker环境: {env_detector.is_docker()}")
         
         # 使用ThreadPoolExecutor来执行函数
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -81,7 +137,7 @@ def run_with_timeout(func, *args, timeout_seconds=30, default=None, error_messag
         # 函数执行超时
         execution_time = time.time() - start_time
         error_msg = error_message or f"函数 {func.__name__} 执行超时（{actual_timeout}秒）"
-        logger.error(f"{error_msg} - Docker环境: {is_docker} - 实际执行时间: {execution_time:.2f}秒")
+        logger.error(f"{error_msg} - Docker环境: {env_detector.is_docker()} - 实际执行时间: {execution_time:.2f}秒")
         return default
     except Exception as e:
         # 捕获其他异常

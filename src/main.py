@@ -15,7 +15,7 @@ import hashlib
 from datetime import datetime
 
 # 导入超时控制模块
-from .utils.timeout_decorator import timeout, run_with_timeout, TimeoutContext
+from .utils.timeout_decorator import timeout, run_with_timeout, TimeoutContext, timeout_config
 
 # 添加项目根目录到Python路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -308,6 +308,30 @@ class PlexAutoScan:
         Args:
             directories (list): 目录路径列表
         """
+        # 检查是否有可用的目录
+        any_valid_dir = False
+        for directory in directories:
+            # 验证目录
+            # 修复: 正确转换TEST_ENV为布尔值
+            test_env_value = self.config.get('TEST_ENV', False)
+            is_test_env = str(test_env_value).lower() in ('true', 'yes', '1', 'y', 't')
+            
+            verified_dir, is_valid = verify_path(directory, is_test_env)
+            
+            if not is_valid:
+                self.logger.warning(f"跳过无效目录: {directory}")
+                self.skipped_count += 1
+                continue
+            
+            any_valid_dir = True
+            break
+        
+        # 如果没有可用的目录，记录警告并退出，让容器按现有配置重试
+        if not any_valid_dir:
+            self.logger.warning(f"所有目录都不可用，将在10分钟后重试")
+            return
+        
+        # 处理可用的目录
         for directory in directories:
             # 验证目录
             # 修复: 正确转换TEST_ENV为布尔值
@@ -429,14 +453,9 @@ class PlexAutoScan:
                 self.logger.error(f"处理目录时发生错误: {str(e)}")
                 raise
         
-        # 检测是否在Docker环境中运行
-        is_docker = os.environ.get('DOCKER_ENV') == '1' or os.path.exists('/.dockerenv')
-        
         # 根据环境设置不同的超时时间
-        timeout_seconds = 1800  # 默认30分钟
-        if is_docker:
-            timeout_seconds = 900  # Docker环境下15分钟
-            self.logger.info(f"在Docker环境中运行，设置目录处理超时: {timeout_seconds}秒")
+        timeout_seconds = timeout_config.get_timeout('very_long')  # 超长超时：30分钟
+        self.logger.info(f"目录处理超时设置: {timeout_seconds}秒")
         
         # 使用带超时的方式运行核心处理逻辑
         success = run_with_timeout(

@@ -1,0 +1,51 @@
+services:
+  plex-auto-scan:
+    build: .
+    image: plex-auto-scan:latest
+    container_name: plex-auto-scan
+    restart: unless-stopped
+    # 针对飞牛OS（Debian-based）的优化配置
+    volumes:
+      - ./config.env:/data/config.env
+      - ./data/cache:/data/cache
+      - ./data/snapshots:/data/snapshots
+      # 直接映射实际的云盘挂载路径到Docker容器内
+      - /vol02/CloudDrive/WebDAV:/vol02/CloudDrive/WebDAV:ro
+      # 挂载环境调试脚本
+      # 确保文件存在，避免Docker自动创建目录
+      - ./debug_docker_env.sh:/debug_docker_env.sh:ro
+      # 挂载Docker环境依赖验证脚本
+      - ./docker_dependency_check.sh:/docker_dependency_check.sh:ro
+    ports:
+      - "8090:8090"
+    environment:
+      - TZ=Asia/Shanghai
+      - DOCKER_ENV=1           # 标识运行在Docker环境
+      - DEBUG=0                # 调试模式（1=开启，0=关闭）
+      # TEST_ENV由config.env文件设置，不再在此硬编码
+      - LOCAL_PATH_PREFIX=/vol02/CloudDrive/WebDAV  # Docker容器内路径前缀
+      - PROD_TARGET_PATH_PREFIX=/vol02/CloudDrive/WebDAV  # 生产环境目标路径前缀
+    command: ["sh", "-c", "mkdir -p /data/snapshots /data/logs /data/output && chmod -R 777 /data/snapshots && while true; do /venv/bin/python -m src.main; sleep 600; done"]
+    cap_add:
+      - DAC_READ_SEARCH
+      - SYS_ADMIN  # 增加系统管理员权限以更好地处理文件系统操作
+    security_opt:
+      - apparmor:unconfined
+    # 飞牛OS特定配置：使用host网络模式以避免网络权限问题
+    network_mode: host
+    # 添加资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: '2G'
+        reservations:
+          cpus: '0.5'
+          memory: '1G'
+    # 添加健康检查
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl --fail http://localhost:8090/health || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

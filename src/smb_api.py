@@ -10,6 +10,7 @@ import logging
 
 # 导入超时控制模块
 from .utils.timeout_decorator import timeout, run_with_timeout, TimeoutContext
+from .utils.environment import env_detector
 
 # 设置socket超时时间
 socket.setdefaulttimeout(30)
@@ -22,14 +23,8 @@ IS_WINDOWS = sys.platform == 'win32'
 IS_LINUX = sys.platform == 'linux'
 IS_DARWIN = sys.platform == 'darwin'
 
-# Docker环境检测
-def is_docker_environment():
-    """检测是否在Docker环境中运行"""
-    return (os.environ.get('DOCKER_ENV') == 'true' or 
-            os.path.exists('/.dockerenv') or 
-            os.path.exists('/proc/1/cgroup') and 'docker' in open('/proc/1/cgroup').read())
-
-IS_DOCKER = is_docker_environment()
+# Docker环境检测 - 使用统一的环境检测器
+IS_DOCKER = env_detector.is_docker()
 
 # 工具函数，用于获取平台特定路径分隔符
 def get_path_separator(path):
@@ -47,19 +42,6 @@ def normalize_path_separator(path):
         return path.replace('/', '\\')
     else:
         return path.replace('\\', '/')
-
-# 日志包装函数
-def error(message):
-    logger.error(f"[SMB] {message}")
-
-def warn(message):
-    logger.warning(message)
-
-def info(message):
-    logger.info(message)
-
-def debug(message):
-    logger.debug(message)
 
 class SMBManager:
     """SMB连接管理类，提供SMB文件系统操作接口"""
@@ -99,7 +81,7 @@ class SMBManager:
         self.timeout_factor_low = 0.7   # 网络状况好时的超时因子
         
         # 记录初始化信息
-        info(f"SMB管理器已初始化 - 平台: {sys.platform}, Docker环境: {IS_DOCKER}")
+        logger.info(f"SMB管理器已初始化 - 平台: {sys.platform}, Docker环境: {IS_DOCKER}")
 
     @timeout(seconds=60, error_message="SMB连接超时")
     def connect(self, server, share, user=None, password=None, domain=None, timeout=None):
@@ -133,10 +115,10 @@ class SMBManager:
             if conn_key in self._connections:
                 conn = self._connections[conn_key]
                 if conn.is_connected():
-                    debug(f"使用现有SMB连接: {server}\{share}")
+                    logger.debug(f"使用现有SMB连接: {server}\\{share}")
                     return conn, None
                 else:
-                    debug(f"移除断开的SMB连接: {server}\{share}")
+                    logger.debug(f"移除断开的SMB连接: {server}\\{share}")
                     del self._connections[conn_key]
 
         try:
@@ -159,26 +141,26 @@ class SMBManager:
             # 连接服务器，使用超时参数
             connected = conn.connect(server, 445)
             if not connected:
-                error(f"无法连接到SMB服务器: {server}\{share}")
-                return None, f"无法连接到SMB服务器: {server}\{share}"
+                logger.error(f"[SMB] 无法连接到SMB服务器: {server}\\{share}")
+                return None, f"无法连接到SMB服务器: {server}\\{share}"
 
             # 线程安全地存储连接
             with self._lock:
                 self._connections[conn_key] = conn
             
-            info(f"成功连接到SMB服务器: {server}\{share}")
+            logger.info(f"[SMB] 成功连接到SMB服务器: {server}\\{share}")
             return conn, None
 
         except socket.timeout:
-            error(f"SMB连接超时: {server}\{share}（{timeout}秒后）")
-            return None, f"SMB连接超时: {server}\{share}（{timeout}秒后）"
+            logger.error(f"[SMB] SMB连接超时: {server}\\{share}（{timeout}秒后）")
+            return None, f"SMB连接超时: {server}\\{share}（{timeout}秒后）"
         except socket.error as e:
-            error(f"SMB网络错误: {str(e)} - 服务器: {server}\{share}")
-            return None, f"SMB网络错误: {str(e)} - 服务器: {server}\{share}"
+            logger.error(f"[SMB] SMB网络错误: {str(e)} - 服务器: {server}\\{share}")
+            return None, f"SMB网络错误: {str(e)} - 服务器: {server}\\{share}"
         except Exception as e:
-            error(f"SMB连接错误: {str(e)} - 服务器: {server}\{share}")
-            error(f"错误详情 - 平台: {sys.platform}, Docker环境: {IS_DOCKER}")
-            return None, f"SMB连接错误: {str(e)} - 服务器: {server}\{share}"
+            logger.error(f"[SMB] SMB连接错误: {str(e)} - 服务器: {server}\\{share}")
+            logger.error(f"[SMB] 错误详情 - 平台: {sys.platform}, Docker环境: {IS_DOCKER}")
+            return None, f"SMB连接错误: {str(e)} - 服务器: {server}\\{share}"
         finally:
             # 恢复原始超时设置
             socket.setdefaulttimeout(original_timeout)
@@ -205,9 +187,9 @@ class SMBManager:
                 try:
                     self._connections[conn_key].close()
                     del self._connections[conn_key]
-                    debug(f"已断开SMB连接: {server}\{share}")
+                    logger.debug(f"[SMB] 已断开SMB连接: {server}\\{share}")
                 except Exception as e:
-                    warn(f"断开SMB连接时出错: {str(e)}")
+                    logger.warning(f"[SMB] 断开SMB连接时出错: {str(e)}")
 
     def is_connected(self, server, share, user=None):
         """检查SMB连接是否活跃"""
@@ -280,7 +262,7 @@ class SMBManager:
                             # 网络状况差，增加超时
                             self.default_timeout = max(120, int(self.default_timeout * self.timeout_factor_high))
                         
-                        debug(f"SMB网络健康状态更新: {self.network_health:.2f}, 超时设置: {self.default_timeout}秒")
+                        logger.debug(f"[SMB] SMB网络健康状态更新: {self.network_health:.2f}, 超时设置: {self.default_timeout}秒")
     
     def get_adaptive_timeout(self, base_timeout=None):
         """获取根据网络状况调整的超时值
@@ -356,14 +338,14 @@ class SMBManager:
             return file_list, dir_list, None
 
         except socket.timeout:
-            error(f"列出SMB文件超时: {server}\{share}{path}（{timeout}秒后）")
-            return [], [], f"列出SMB文件超时: {server}\{share}{path}（{timeout}秒后）"
+            logger.error(f"[SMB] 列出SMB文件超时: {server}\\{share}{path}（{timeout}秒后）")
+            return [], [], f"列出SMB文件超时: {server}\\{share}{path}（{timeout}秒后）"
         except socket.error as e:
-            error(f"SMB网络错误: {str(e)} - 列出文件: {server}\{share}{path}")
-            return [], [], f"SMB网络错误: {str(e)} - 列出文件: {server}\{share}{path}"
+            logger.error(f"[SMB] SMB网络错误: {str(e)} - 列出文件: {server}\\{share}{path}")
+            return [], [], f"SMB网络错误: {str(e)} - 列出文件: {server}\\{share}{path}"
         except Exception as e:
-            error(f"列出SMB文件时出错: {str(e)} - 路径: {server}\{share}{path}")
-            return [], [], f"列出SMB文件时出错: {str(e)} - 路径: {server}\{share}{path}"
+            logger.error(f"[SMB] 列出SMB文件时出错: {str(e)} - 路径: {server}\\{share}{path}")
+            return [], [], f"列出SMB文件时出错: {str(e)} - 路径: {server}\\{share}{path}"
         finally:
             # 恢复原始超时设置
             socket.setdefaulttimeout(original_timeout)
@@ -421,14 +403,14 @@ class SMBManager:
             return None, f"文件不存在: {path}"
 
         except socket.timeout:
-            error(f"获取SMB文件信息超时: {server}\{share}{path}（{timeout}秒后）")
-            return None, f"获取SMB文件信息超时: {server}\{share}{path}（{timeout}秒后）"
+            logger.error(f"[SMB] 获取SMB文件信息超时: {server}\\{share}{path}（{timeout}秒后）")
+            return None, f"获取SMB文件信息超时: {server}\\{share}{path}（{timeout}秒后）"
         except socket.error as e:
-            error(f"SMB网络错误: {str(e)} - 获取文件信息: {server}\{share}{path}")
-            return None, f"SMB网络错误: {str(e)} - 获取文件信息: {server}\{share}{path}"
+            logger.error(f"[SMB] SMB网络错误: {str(e)} - 获取文件信息: {server}\\{share}{path}")
+            return None, f"SMB网络错误: {str(e)} - 获取文件信息: {server}\\{share}{path}"
         except Exception as e:
-            error(f"获取SMB文件信息时出错: {str(e)} - 路径: {server}\{share}{path}")
-            return None, f"获取SMB文件信息时出错: {str(e)} - 路径: {server}\{share}{path}"
+            logger.error(f"[SMB] 获取SMB文件信息时出错: {str(e)} - 路径: {server}\\{share}{path}")
+            return None, f"获取SMB文件信息时出错: {str(e)} - 路径: {server}\\{share}{path}"
         finally:
             # 恢复原始超时设置
             socket.setdefaulttimeout(original_timeout)
@@ -492,14 +474,14 @@ class SMBManager:
                 return False, f"检查路径时出错: {str(e)} - {path}"
 
         except socket.timeout:
-            error(f"SMB路径检查超时: {server}\{share}{path}（{timeout}秒后）")
-            return False, f"SMB路径检查超时: {server}\{share}{path}（{timeout}秒后）"
+            logger.error(f"[SMB] SMB路径检查超时: {server}\\{share}{path}（{timeout}秒后）")
+            return False, f"SMB路径检查超时: {server}\\{share}{path}（{timeout}秒后）"
         except socket.error as e:
-            error(f"SMB网络错误: {str(e)} - 检查路径: {server}\{share}{path}")
-            return False, f"SMB网络错误: {str(e)} - 检查路径: {server}\{share}{path}"
+            logger.error(f"[SMB] SMB网络错误: {str(e)} - 检查路径: {server}\\{share}{path}")
+            return False, f"SMB网络错误: {str(e)} - 检查路径: {server}\\{share}{path}"
         except Exception as e:
-            error(f"检查SMB路径时出错: {str(e)} - 路径: {server}\{share}{path}")
-            return False, f"检查SMB路径时出错: {str(e)} - 路径: {server}\{share}{path}"
+            logger.error(f"[SMB] 检查SMB路径时出错: {str(e)} - 路径: {server}\\{share}{path}")
+            return False, f"检查SMB路径时出错: {str(e)} - 路径: {server}\\{share}{path}"
         finally:
             # 恢复原始超时设置
             socket.setdefaulttimeout(original_timeout)
@@ -530,7 +512,7 @@ class SMBManager:
                 try:
                     # 记录当前连接状态
                     conn_status = self.is_connected(server, share, user)
-                    debug(f"保活检查 - 当前连接状态: {conn_status} - {server}\{share}")
+                    logger.debug(f"[SMB] 保活检查 - 当前连接状态: {conn_status} - {server}\\{share}")
                     
                     # 使用较短的超时时间进行保活操作
                     conn, err = self.connect(server, share, user, password, domain, timeout)
@@ -553,7 +535,7 @@ class SMBManager:
                                     
                                     # 在Docker环境中记录连接状态
                                     if IS_DOCKER:
-                                        debug(f"SMB连接保持活跃: {server}\{share} - 活跃连接数: {self.get_active_connections_count()}")
+                                        logger.debug(f"[SMB] SMB连接保持活跃: {server}\\{share} - 活跃连接数: {self.get_active_connections_count()}")
                                 finally:
                                     # 恢复原始超时设置
                                     socket.setdefaulttimeout(original_timeout)
@@ -566,10 +548,10 @@ class SMBManager:
                                 error_message=f"SMB保活操作超时: {server}\{share}"
                             )
                         except Exception as e:
-                            warn(f"SMB保活操作失败: {str(e)} - {server}\{share}")
+                            logger.warning(f"[SMB] SMB保活操作失败: {str(e)} - {server}\\{share}")
                             # 在Docker环境中更频繁地重连
                             if IS_DOCKER:
-                                warn(f"Docker环境下SMB连接异常，尝试重建连接...")
+                                logger.warning(f"[SMB] Docker环境下SMB连接异常，尝试重建连接...")
                                 with self._lock:
                                     conn_key = f"{server}:{share}:{user or self.default_user}"
                                     if conn_key in self._connections:
@@ -580,11 +562,11 @@ class SMBManager:
                                             pass
                     elif err:
                         attempt += 1
-                        warn(f"SMB保活连接失败 ({attempt}/{max_attempts}): {err}")
+                        logger.warning(f"[SMB] SMB保活连接失败 ({attempt}/{max_attempts}): {err}")
                         
                         # 如果连续多次失败，可能需要更积极的重连策略
                         if attempt >= max_attempts and IS_DOCKER:
-                            warn(f"Docker环境下连续{max_attempts}次SMB保活失败，清理所有连接并重建...")
+                            logger.warning(f"[SMB] Docker环境下连续{max_attempts}次SMB保活失败，清理所有连接并重建...")
                             with self._lock:
                                 # 清理所有与该服务器相关的连接
                                 keys_to_remove = []
@@ -599,7 +581,7 @@ class SMBManager:
                                         pass
                             attempt = 0  # 重置尝试计数
                 except Exception as e:
-                    warn(f"SMB连接保持失败: {str(e)} - {server}\{share}")
+                    logger.warning(f"[SMB] SMB连接保持失败: {str(e)} - {server}\\{share}")
                 
                 # 根据环境调整休眠时间
                 sleep_time = interval
@@ -607,12 +589,12 @@ class SMBManager:
                     # 失败时使用指数退避策略
                     sleep_time = min(interval * (2 ** (attempt - 1)), 300)  # 最多5分钟
                 
-                debug(f"SMB保活线程休眠: {sleep_time}秒 - {server}\{share}")
+                logger.debug(f"[SMB] SMB保活线程休眠: {sleep_time}秒 - {server}\\{share}")
                 time.sleep(sleep_time)
 
         thread = threading.Thread(target=_keep_alive, daemon=True, name=f"SMB-KeepAlive-{server}-{share}")
         thread.start()
-        info(f"已启动SMB连接保持线程: {server}\{share}（间隔: {interval}秒）")
+        logger.info(f"[SMB] 已启动SMB连接保持线程: {server}\\{share}（间隔: {interval}秒）")
         return thread
 
 # 导出常用函数

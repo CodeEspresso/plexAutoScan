@@ -1,0 +1,3 @@
+/Volumes/PSSD/项目/plexAutoScan/test_files/音乐/示例艺术家/示例专辑/示例歌曲1.mp3
+/Volumes/PSSD/项目/plexAutoScan/test_files/音乐/示例艺术家/示例专辑/示例歌曲2.mp3
+/Volumes/PSSD/项目/plexAutoScan/test_files/音乐/示例艺术家/示例专辑/示例歌曲3.mp3

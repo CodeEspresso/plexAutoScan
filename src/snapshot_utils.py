@@ -29,7 +29,8 @@ socket.setdefaulttimeout(30)
 from .smb_api import SMBManager
 
 # 导入超时控制工具函数
-from .utils.timeout_decorator import run_with_timeout
+from .utils.timeout_decorator import run_with_timeout, timeout_config
+from .utils.environment import env_detector
 
 # 确保Python使用UTF-8编码
 import io
@@ -80,22 +81,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def error(message):
-    """输出错误信息"""
-    logger.error(message)
-
-def warn(message):
-    """输出警告信息"""
-    logger.warning(message)
-
-def info(message):
-    """输出信息"""
-    logger.info(message)
-
-def debug(message):
-    """输出调试信息"""
-    logger.debug(message)
-
 def is_auxiliary_file(file_path):
     """
     检查文件是否为辅助文件（海报、字幕等）
@@ -140,7 +125,7 @@ def is_auxiliary_folder(folder_path):
 
 def handle_error(error_code, message):
     """处理错误并返回错误码"""
-    error(f"错误 {error_code}: {message}")
+    logger.error(f"错误 {error_code}: {message}")
     return error_code
 
 def calculate_checksum(file_path, algorithm='md5'):
@@ -160,7 +145,7 @@ def calculate_checksum(file_path, algorithm='md5'):
                 hash_obj.update(chunk)
         return hash_obj.hexdigest()
     except Exception as e:
-        error(f"计算校验和失败 ({file_path}): {str(e)}")
+        logger.error(f"计算校验和失败 ({file_path}): {str(e)}")
         return None
 
 def verify_checksum(file_path, expected_checksum, algorithm='md5'):
@@ -201,13 +186,13 @@ def keep_smb_alive(smb_path, interval=15, timeout=5):
         if is_docker_environment():
             # 在Docker环境中，/vol02/CloudDrive/WebDAV是通过Docker卷直接挂载到容器内的本地路径
             # 不需要在容器内执行SMB连接操作
-            debug(f"Docker环境下检测到SMB路径，跳过容器内SMB连接操作: {smb_path}")
-            debug(f"在Docker环境中，路径已通过卷挂载方式映射，无需SMB连接保持")
+            logger.debug(f"Docker环境下检测到SMB路径，跳过容器内SMB连接操作: {smb_path}")
+            logger.debug(f"在Docker环境中，路径已通过卷挂载方式映射，无需SMB连接保持")
             # 使用事件对象等待停止信号，避免无限sleep
             while not stop_event.is_set():
                 # 使用较短的等待时间，以便能够及时响应停止信号
                 stop_event.wait(interval)
-            debug(f"Docker环境下SMB连接保持线程已停止: {smb_path}")
+            logger.debug(f"Docker环境下SMB连接保持线程已停止: {smb_path}")
             return
 
         # 获取SMBManager单例实例
@@ -236,13 +221,13 @@ def keep_smb_alive(smb_path, interval=15, timeout=5):
             server = os.environ.get('WEBDAV_SERVER', 'localhost')
             share = 'WebDAV'
             # 对于WebDAV路径，增加专门的日志信息
-            debug(f"识别到WebDAV路径: {smb_path}")
+            logger.debug(f"识别到WebDAV路径: {smb_path}")
         
         while True:
             try:
                 # 执行实际的SMB操作来保持连接活跃
                 # 使用path_exists操作，这是一个轻量级的操作
-                debug(f"执行SMB连接保持检查: {smb_path}")
+                logger.debug(f"执行SMB连接保持检查: {smb_path}")
                 
                 # 尝试获取SMB连接并执行简单操作
                 conn, err = smb_manager.connect(server, share, timeout=timeout)
@@ -251,13 +236,13 @@ def keep_smb_alive(smb_path, interval=15, timeout=5):
                     try:
                         # 使用基本路径执行检查，避免复杂路径解析
                         exists, _ = smb_manager.path_exists(server, share, "/", timeout=timeout)
-                        debug(f"SMB连接保持成功，路径可访问: {smb_path}")
+                        logger.debug(f"SMB连接保持成功，路径可访问: {smb_path}")
                     except Exception as inner_e:
-                        debug(f"SMB连接保持操作失败: {inner_e}")
+                        logger.debug(f"SMB连接保持操作失败: {inner_e}")
                 elif err:
-                    debug(f"SMB连接保持失败: {err}")
+                    logger.debug(f"SMB连接保持失败: {err}")
             except Exception as e:
-                warn(f"SMB连接保持线程异常: {e}")
+                logger.warning(f"SMB连接保持线程异常: {e}")
             time.sleep(interval)
 
     # 启动后台线程
@@ -270,34 +255,21 @@ def keep_smb_alive(smb_path, interval=15, timeout=5):
         stop_event.set()
         # 等待线程结束（最多等待interval+1秒）
         thread.join(interval + 1)
-        debug(f"已请求停止SMB/WebDAV连接保持线程: {smb_path}")
+        logger.debug(f"已请求停止SMB/WebDAV连接保持线程: {smb_path}")
     
     thread.stop = stop
     return thread
 
 def is_docker_environment():
     """检测是否在Docker环境中运行
-    与shell脚本保持一致的检测方法
+    使用统一的环境检测器
     
     Returns:
         bool: 是否在Docker环境中
     """
-    # 方法1: 检查环境变量
-    if os.environ.get('DOCKER_ENV') == '1':
-        return True
-    # 方法2: 检查Docker特有的文件
-    if os.path.exists('/.dockerenv'):
-        return True
-    # 方法3: 检查cgroup信息
-    try:
-        with open('/proc/1/cgroup', 'r') as f:
-            if 'docker' in f.read():
-                return True
-    except Exception:
-        pass
-    return False
+    return env_detector.is_docker()
 
-def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=False, large_threshold=10000, min_size=0, min_size_mb=0, retry_count=3, timeout=300):
+def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=False, large_threshold=10000, min_size=0, min_size_mb=0, retry_count=3, timeout=None):
     # 从配置获取WebDAV路径前缀
     prod_path_prefix = config.get('PROD_PATH_PREFIX', '/vol02/CloudDrive/WebDAV')
     test_path_prefix = config.get('TEST_PATH_PREFIX', '/Volumes/CloudDrive/WebDAV')
@@ -305,12 +277,14 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
     
     # 为WebDAV路径增加超时时间和重试次数
     if is_webdav_path:
-        # WebDAV路径默认超时设置为600秒（10分钟）
-        webdav_timeout = int(os.environ.get('WEBDAV_SNAPSHOT_TIMEOUT', '600'))
-        timeout = max(timeout, webdav_timeout)
+        # 使用统一的超时配置
+        timeout = timeout_config.get_timeout('very_long')  # 超长超时：30分钟
         # 增加WebDAV路径的重试次数
         retry_count = max(retry_count, int(os.environ.get('WEBDAV_RETRY_COUNT', '5')))
-        logger.info(f"为WebDAV路径设置超时时间: {timeout}秒，重试次数: {retry_count}")
+        logger.logger.info(f"为WebDAV路径设置超时时间: {timeout}秒，重试次数: {retry_count}")
+    else:
+        # 使用默认超时配置
+        timeout = timeout_config.get_timeout('long')  # 长时间超时：10分钟
     """生成目录快照
     
     Args:
@@ -334,7 +308,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
     # 定义核心生成快照逻辑函数
     def _generate_snapshot_core():
         try:
-            info(f"开始扫描目录: {dir}")
+            logger.info(f"开始扫描目录: {dir}")
             
             # 转换min_size_mb为字节，并添加验证逻辑
             try:
@@ -343,7 +317,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 if min_size_mb_val < 0:
                     min_size_mb_val = 0
                 elif min_size_mb_val > 10000:  # 限制在10GB以内
-                    warn(f"最小文件大小 {min_size_mb_val} MB 超出合理范围，使用默认值10MB")
+                    logger.warning(f"最小文件大小 {min_size_mb_val} MB 超出合理范围，使用默认值10MB")
                     min_size_mb_val = 10
                 
                 min_size_bytes = max(min_size, int(min_size_mb_val * 1024 * 1024))
@@ -351,7 +325,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 # 保留这个逻辑，用于计算实际的字节值
                 # if min_size_bytes > 0:  # 已禁用，改为在main.py中只打印一次
             except (ValueError, TypeError):
-                error(f"无效的最小文件大小参数: {min_size_mb}，使用默认值0字节")
+                logger.error(f"无效的最小文件大小参数: {min_size_mb}，使用默认值0字节")
                 min_size_bytes = max(min_size, 0)
             
             # 转换large_threshold为字节
@@ -373,7 +347,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 # 确保线程数在合理范围内 (5-10) 根据用户要求调整
                 smb_max_workers = max(5, min(smb_max_workers, 10))
             except ValueError:
-                warn(f"无效的SMB_MAX_WORKERS配置: {smb_max_workers}，使用默认值5")
+                logger.warning(f"无效的SMB_MAX_WORKERS配置: {smb_max_workers}，使用默认值5")
                 smb_max_workers = 5
                 
             # 初始化动态线程数调整相关变量
@@ -434,21 +408,21 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 # 识别WebDAV路径并启动连接保持线程
                 if is_docker_environment():
                     # 在Docker环境中，路径通过卷挂载
-                    debug(f"Docker环境下检测到WebDAV路径: {dir}，使用卷挂载方式访问")
+                    logger.debug(f"Docker环境下检测到WebDAV路径: {dir}，使用卷挂载方式访问")
                     # 即使在Docker环境中，也为WebDAV路径启动连接保持线程，因为WebDAV连接可能不稳定
                     webdav_interval = int(os.environ.get('WEBDAV_KEEP_ALIVE_INTERVAL', '8'))
-                    info(f"检测到WebDAV路径，启动连接保持线程: {dir} (间隔: {webdav_interval}秒)")
+                    logger.info(f"检测到WebDAV路径，启动连接保持线程: {dir} (间隔: {webdav_interval}秒)")
                     smb_thread = keep_smb_alive(dir, interval=webdav_interval, timeout=10)  # 增加WebDAV超时时间
                 else:
                     webdav_interval = int(os.environ.get('WEBDAV_KEEP_ALIVE_INTERVAL', '6'))
-                    info(f"检测到WebDAV路径，启动连接保持线程: {dir} (间隔: {webdav_interval}秒)")
+                    logger.info(f"检测到WebDAV路径，启动连接保持线程: {dir} (间隔: {webdav_interval}秒)")
                     smb_thread = keep_smb_alive(dir, interval=webdav_interval, timeout=10)
             elif dir.startswith('//'):
                 # 标准SMB路径
                 if is_docker_environment():
-                    debug(f"Docker环境下检测到SMB路径: {dir}，使用卷挂载方式访问")
+                    logger.debug(f"Docker环境下检测到SMB路径: {dir}，使用卷挂载方式访问")
                 else:
-                    info(f"检测到SMB路径，启动连接保持线程: {dir}")
+                    logger.info(f"检测到SMB路径，启动连接保持线程: {dir}")
                 smb_thread = keep_smb_alive(dir, interval=15, timeout=5)
             else:
                 smb_thread = None
@@ -463,7 +437,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
             if dir.startswith((prod_path_prefix, test_path_prefix)):
                 if max_files == 0 or max_files > 200:
                     use_parallel = True
-                    debug(f"[WebDAV] 启用并行处理 (文件数阈值: 200)")
+                    logger.debug(f"[WebDAV] 启用并行处理 (文件数阈值: 200)")
             else:
                 if max_files == 0 or max_files > 1000:
                     use_parallel = True
@@ -476,7 +450,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 try:
                     # 对所有路径类型（包括Docker环境下的卷挂载路径）都进行辅助文件检查
                     if is_auxiliary_file(file_path):
-                        debug(f"跳过辅助文件: {file_path}")
+                        logger.debug(f"跳过辅助文件: {file_path}")
                         skipped_auxiliary += 1
                         return False
                     
@@ -537,12 +511,12 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             # 对WebDAV路径使用更激进的延迟调整策略
                             if is_webdav_path:
                                 adaptive_batch_delay = max(scan_delay * 2.5, adaptive_batch_delay * 1.8)
-                                info(f"[WebDAV] 连接错误增加，增加批处理延迟: {adaptive_batch_delay:.2f}s")
+                                logger.info(f"[WebDAV] 连接错误增加，增加批处理延迟: {adaptive_batch_delay:.2f}s")
                             else:
                                 adaptive_batch_delay = max(scan_delay * 2, adaptive_batch_delay * 1.5)
-                                info(f"SMB连接错误增加，增加批处理延迟: {adaptive_batch_delay:.2f}s")
+                                logger.info(f"SMB连接错误增加，增加批处理延迟: {adaptive_batch_delay:.2f}s")
                     else:
-                        error(f"处理文件失败 ({file_path}): {error_msg}")
+                        logger.error(f"处理文件失败 ({file_path}): {error_msg}")
                     return False
             
             # 遍历目录
@@ -558,7 +532,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 
                 if is_webdav_path:
                     # WebDAV路径专用优化：使用线程池并行收集文件路径
-                    debug(f"[WebDAV] 开始并行收集文件路径...")
+                    logger.debug(f"[WebDAV] 开始并行收集文件路径...")
                     
                     # 预创建目录队列和结果队列
                     dir_queue = queue.Queue()
@@ -595,7 +569,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                                         time.sleep(retry_delay)
                                         retry_delay *= 1.5  # 指数退避
                                     else:
-                                        logger.error(f"[WebDAV] 读取目录内容失败: {str(e)}")
+                                        logger.logger.error(f"[WebDAV] 读取目录内容失败: {str(e)}")
                                         items = []
                             
                             # 分别处理文件和目录
@@ -635,7 +609,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             
                             return True
                         except Exception as e:
-                            warn(f"[WebDAV] 处理目录 {directory} 时出错: {str(e)}")
+                            logger.warning(f"[WebDAV] 处理目录 {directory} 时出错: {str(e)}")
                             return True
                     
                     # 创建专门用于收集文件的线程池
@@ -676,7 +650,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     temp_file_paths = collected_files
                     
                     collect_time = time.time() - collect_start_time
-                    debug(f"[WebDAV] 并行收集文件完成: {len(temp_file_paths)} 个文件, 耗时 {collect_time:.2f} 秒")
+                    logger.debug(f"[WebDAV] 并行收集文件完成: {len(temp_file_paths)} 个文件, 耗时 {collect_time:.2f} 秒")
                 else:
                     # 非WebDAV路径保持原有逻辑
                     for root, dirs, files in os.walk(dir):
@@ -696,7 +670,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             excluded_dir_count += len(dirs) - len(os.walk(root))
                             break
                 
-                info(f"开始并行处理 {len(temp_file_paths)} 个文件 (初始线程数: {current_workers}, 最大线程数: {max_workers})...")
+                logger.info(f"开始并行处理 {len(temp_file_paths)} 个文件 (初始线程数: {current_workers}, 最大线程数: {max_workers})...")
                 
                 # 分批处理文件 - 优化延迟计算逻辑
                 # 根据文件总数和批处理大小计算总批次数
@@ -783,7 +757,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 # - 特殊目录：调整延迟以适应特殊需求
                 if is_docker_environment():
                     # Docker环境下的批处理延迟优化（卷挂载模式）
-                    debug(f"Docker环境下优化批处理延迟")
+                    logger.debug(f"Docker环境下优化批处理延迟")
                     # 检测是否是WebDAV路径
                     prod_path_prefix = config.get('PROD_PATH_PREFIX', '/vol02/CloudDrive/WebDAV')
                     test_path_prefix = config.get('TEST_PATH_PREFIX', '/Volumes/CloudDrive/WebDAV')
@@ -791,7 +765,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     
                     # 针对原盘目录（大量小文件）使用更激进的延迟策略
                     if has_disc_files:
-                        debug(f"原盘目录优化批处理延迟")
+                        logger.debug(f"原盘目录优化批处理延迟")
                         # 原盘目录通常包含大量小文件，需要更激进的延迟策略
                         if total_batches <= 5:
                             batch_delay = max(0.1, adaptive_batch_delay * 0.5)  # 少量批处理，使用极低延迟
@@ -801,7 +775,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             batch_delay = max(0.03, adaptive_batch_delay / (total_batches / 10) * 0.5)  # 大量批处理，极端激进的动态延迟
                     # 针对WebDAV路径使用专用的批处理延迟优化
                     elif is_webdav_path:
-                        debug(f"[WebDAV] 优化批处理延迟")
+                        logger.debug(f"[WebDAV] 优化批处理延迟")
                         # WebDAV路径在Docker环境下通常可以使用更激进的延迟策略
                         if total_batches <= 5:
                             batch_delay = max(0.001, adaptive_batch_delay * 0.1)  # 少量批处理，使用极低延迟
@@ -837,9 +811,9 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                         else:
                             batch_delay = max(0.1, adaptive_batch_delay / (total_batches / 10))
                 
-                debug(f"批处理延迟设置为 {batch_delay:.2f}s (特殊字符: {has_special_chars}, 大文件: {has_large_files}, 原盘文件: {has_disc_files})")
+                logger.debug(f"批处理延迟设置为 {batch_delay:.2f}s (特殊字符: {has_special_chars}, 大文件: {has_large_files}, 原盘文件: {has_disc_files})")
                 
-                info(f"批处理设置: 每批{batch_size}个文件, 共{total_batches}批, 初始批延迟{batch_delay:.2f}秒")
+                logger.info(f"批处理设置: 每批{batch_size}个文件, 共{total_batches}批, 初始批延迟{batch_delay:.2f}秒")
                 
                 # 为Docker环境优化初始线程数
                 if is_docker_environment():
@@ -852,17 +826,17 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     if has_disc_files:
                         # 原盘目录通常包含大量小文件，需要更多初始线程
                         docker_initial_workers = min(max_workers, current_workers + 4)  # 增加4个初始线程
-                        info(f"Docker环境下优化初始线程数 (原盘目录): {current_workers} -> {docker_initial_workers}")
+                        logger.info(f"Docker环境下优化初始线程数 (原盘目录): {current_workers} -> {docker_initial_workers}")
                     # 针对WebDAV路径使用专用的初始线程数优化
                     elif is_webdav_path:
                         # WebDAV路径在Docker环境下通常能处理更多并行请求
                         docker_initial_workers = min(max_workers, current_workers + 4)  # 增加4个初始线程
-                        info(f"Docker环境下优化初始线程数 (WebDAV路径): {current_workers} -> {docker_initial_workers}")
+                        logger.info(f"Docker环境下优化初始线程数 (WebDAV路径): {current_workers} -> {docker_initial_workers}")
                     else:
                         # 普通Docker环境目录
                         # Docker环境下增加初始线程数，因为卷挂载通常比SMB连接更能处理并行
                         docker_initial_workers = min(max_workers, current_workers + 2)  # 增加2个初始线程
-                        info(f"Docker环境下优化初始线程数: {current_workers} -> {docker_initial_workers}")
+                        logger.info(f"Docker环境下优化初始线程数: {current_workers} -> {docker_initial_workers}")
                     executor = concurrent.futures.ThreadPoolExecutor(max_workers=docker_initial_workers)
                     current_workers = docker_initial_workers
                 else:
@@ -871,7 +845,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     if is_webdav_path and len(temp_file_paths) < 100:
                         # 小文件集合使用较少线程，避免连接过多
                         current_workers = min(current_workers, 2)
-                        info(f"[WebDAV] 小文件集合优化，调整线程数: {max_workers} -> {current_workers}")
+                        logger.info(f"[WebDAV] 小文件集合优化，调整线程数: {max_workers} -> {current_workers}")
                     executor = concurrent.futures.ThreadPoolExecutor(max_workers=current_workers)
                 futures = []
                 batch_count = 0
@@ -905,7 +879,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     if elapsed_time > 0:
                         processing_speed = len(file_paths) / elapsed_time
                         # 记录当前处理速度
-                        debug(f"当前处理速度: {processing_speed:.2f} 文件/秒")
+                        logger.debug(f"当前处理速度: {processing_speed:.2f} 文件/秒")
                     
                     # 检查是否可以增加线程数
                     # 基于成功计数和处理速度的综合判断
@@ -933,7 +907,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             # 针对原盘目录，线程数增加更激进但确保不超过最大限制
                             if has_disc_files and new_workers < max_workers and processing_speed > speed_threshold_high * 0.5:
                                 new_workers = min(max_workers, new_workers + 1)
-                            info(f"Docker环境下处理速度稳定{(', 原盘目录优化' if has_disc_files else '')}，增加线程数: {current_workers} -> {new_workers}")
+                            logger.info(f"Docker环境下处理速度稳定{(', 原盘目录优化' if has_disc_files else '')}，增加线程数: {current_workers} -> {new_workers}")
                             
                             # 关闭当前线程池并创建新的
                             executor.shutdown(wait=False)
@@ -946,7 +920,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             (elapsed_time == 0 or processing_speed > speed_threshold_high)):
                             # 实际调整线程数
                             new_workers = min(max_workers, current_workers + 1)
-                            info(f"SMB连接稳定且处理速度快，增加线程数: {current_workers} -> {new_workers}")
+                            logger.info(f"SMB连接稳定且处理速度快，增加线程数: {current_workers} -> {new_workers}")
                             
                             # 关闭当前线程池并创建新的
                             executor.shutdown(wait=False)
@@ -962,7 +936,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             adaptive_batch_delay = max(scan_delay, adaptive_batch_delay / 1.2)
                         
                         batch_delay = max(0.1, adaptive_batch_delay / (total_batches / 10))
-                        info(f"减少批处理延迟: {adaptive_batch_delay:.2f}s")
+                        logger.info(f"减少批处理延迟: {adaptive_batch_delay:.2f}s")
                         
                         # 重置成功计数
                         success_count = 0
@@ -992,9 +966,9 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             # 实际减少线程数
                             new_workers = max(min_workers, current_workers - 1)
                             if is_webdav_path:
-                                info(f"[WebDAV] Docker环境下处理速度慢，减少线程数: {current_workers} -> {new_workers}")
+                                logger.info(f"[WebDAV] Docker环境下处理速度慢，减少线程数: {current_workers} -> {new_workers}")
                             else:
-                                info(f"Docker环境下处理速度慢，减少线程数: {current_workers} -> {new_workers}")
+                                logger.info(f"Docker环境下处理速度慢，减少线程数: {current_workers} -> {new_workers}")
                     else:
                         # 非Docker环境保持原有策略
                         speed_threshold_low = 5.0  # 低于此速度时考虑减少线程
@@ -1009,9 +983,9 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             # 实际减少线程数
                             new_workers = max(min_workers, current_workers - 1)
                             if is_webdav_path:
-                                info(f"[WebDAV] 连接错误增加或处理速度慢，减少线程数: {current_workers} -> {new_workers}")
+                                logger.info(f"[WebDAV] 连接错误增加或处理速度慢，减少线程数: {current_workers} -> {new_workers}")
                             else:
-                                info(f"SMB连接错误增加或处理速度慢，减少线程数: {current_workers} -> {new_workers}")
+                                logger.info(f"SMB连接错误增加或处理速度慢，减少线程数: {current_workers} -> {new_workers}")
                         
                         # 关闭当前线程池并创建新的
                         executor.shutdown(wait=False)
@@ -1021,10 +995,10 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                         # 增加批处理延迟以减少连接压力
                         if is_webdav_path:
                             adaptive_batch_delay = min(adaptive_batch_delay * 1.2, scan_delay * 3)
-                            info(f"[WebDAV] 增加批处理延迟: {adaptive_batch_delay:.2f}s")
+                            logger.info(f"[WebDAV] 增加批处理延迟: {adaptive_batch_delay:.2f}s")
                         else:
                             adaptive_batch_delay = min(adaptive_batch_delay * 1.5, scan_delay * 3)
-                            info(f"增加批处理延迟: {adaptive_batch_delay:.2f}s")
+                            logger.info(f"增加批处理延迟: {adaptive_batch_delay:.2f}s")
                         
                         batch_delay = max(0.1, adaptive_batch_delay / (total_batches / 10))
                         
@@ -1038,9 +1012,9 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     executor.shutdown(wait=True)
                 
                 elapsed = time.time() - start_time
-                info(f"并行处理完成，耗时 {elapsed:.2f} 秒，最终线程数: {current_workers}")
+                logger.info(f"并行处理完成，耗时 {elapsed:.2f} 秒，最终线程数: {current_workers}")
             else:
-                info(f"开始单线程处理 {len(file_paths)} 个文件...")
+                logger.info(f"开始单线程处理 {len(file_paths)} 个文件...")
                 start_time = time.time()
                 for root, dirs, files in os.walk(dir):
                     dir_count += len(dirs)
@@ -1055,16 +1029,16 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                         break
                 
                 elapsed = time.time() - start_time
-                info(f"单线程处理完成，耗时 {elapsed:.2f} 秒")
+                logger.info(f"单线程处理完成，耗时 {elapsed:.2f} 秒")
             
             # 扫描完成后，确保SMB连接保持线程停止
             if 'smb_thread' in locals() and smb_thread is not None:
                 # 调用线程的stop方法来停止连接保持线程
                 try:
                     smb_thread.stop()
-                    info(f"已停止SMB/WebDAV连接保持线程: {dir}")
+                    logger.info(f"已停止SMB/WebDAV连接保持线程: {dir}")
                 except Exception as e:
-                    warn(f"停止SMB连接保持线程时发生错误: {str(e)}")
+                    logger.warning(f"停止SMB连接保持线程时发生错误: {str(e)}")
                 smb_thread = None  # 释放引用以帮助垃圾回收
             
             # 清空预取缓存
@@ -1075,9 +1049,9 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
             if is_docker_environment():
                 # 在Docker环境中，路径通过卷挂载，不涉及SMB连接
                 if smb_errors:
-                    debug(f"Docker环境下检测到文件访问错误: {len(smb_errors)}个 (注意：在Docker环境中这些不是SMB连接错误，而是文件系统访问问题)")
+                    logger.debug(f"Docker环境下检测到文件访问错误: {len(smb_errors)}个 (注意：在Docker环境中这些不是SMB连接错误，而是文件系统访问问题)")
                 else:
-                    debug("Docker环境下文件访问正常，使用卷挂载方式访问路径")
+                    logger.debug("Docker环境下文件访问正常，使用卷挂载方式访问路径")
             else:
                 # 非Docker环境下的SMB错误统计
                 if smb_errors:
@@ -1085,19 +1059,19 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     if error_count <= 10:
                         # 如果错误不多，打印所有错误
                         for err in smb_errors:
-                            warn(f"SMB处理错误: {err}")
+                            logger.warning(f"SMB处理错误: {err}")
                     else:
                         # 如果错误很多，只打印部分并统计
                         sample_errors = smb_errors[:3]
                         for err in sample_errors:
-                            warn(f"SMB处理错误（示例）: {err}")
-                        warn(f"总共发现 {error_count} 个SMB连接错误")
+                            logger.warning(f"SMB处理错误（示例）: {err}")
+                        logger.warning(f"总共发现 {error_count} 个SMB连接错误")
                     
                     # 分析错误模式，提供优化建议
                     if error_count > 0 and current_workers < max_workers:
-                        info(f"建议：考虑在config.env中降低SMB_MAX_WORKERS值，当前为{smb_max_workers}，最终调整为{current_workers}")
+                        logger.info(f"建议：考虑在config.env中降低SMB_MAX_WORKERS值，当前为{smb_max_workers}，最终调整为{current_workers}")
                 else:
-                    info("未检测到SMB连接错误，连接保持良好")
+                    logger.info("未检测到SMB连接错误，连接保持良好")
 
             # 排序并写入快照文件
             files = sorted(file_paths)
@@ -1105,21 +1079,21 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
 
             # 即使有文件处理失败，也要尽可能保留已成功扫描的文件
             if not files:
-                info("没有文件需要写入快照，跳过创建空快照文件")
+                logger.info("没有文件需要写入快照，跳过创建空快照文件")
                 # 确保不会尝试创建或检查不存在的快照文件
                 if os.path.exists(temp_output):
                     try:
                         os.remove(temp_output)
-                        debug(f"已删除临时文件: {temp_output}")
+                        logger.debug(f"已删除临时文件: {temp_output}")
                     except Exception as e:
-                        warn(f"删除临时文件失败: {str(e)}")
+                        logger.warning(f"删除临时文件失败: {str(e)}")
                 # 删除可能存在的目标文件，避免后续检查
                 if os.path.exists(output_file):
                     try:
                         os.remove(output_file)
-                        debug(f"已删除目标文件: {output_file}")
+                        logger.debug(f"已删除目标文件: {output_file}")
                     except Exception as e:
-                        warn(f"删除目标文件失败: {str(e)}")
+                        logger.warning(f"删除目标文件失败: {str(e)}")
                 # 返回成功但文件数为0，这样上层调用可以决定是否继续处理
                 return 0  # 修改为返回0表示成功但没有文件，而不是错误码
             
@@ -1128,17 +1102,17 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
             # 如果output_dir为空，使用当前目录
             if not output_dir:
                 output_dir = os.getcwd()
-                info(f"未指定输出目录，使用当前目录: {output_dir}")
+                logger.info(f"未指定输出目录，使用当前目录: {output_dir}")
             if not os.path.exists(output_dir):
                 try:
                     os.makedirs(output_dir, exist_ok=True)
-                    info(f"创建输出目录: {output_dir}")
+                    logger.info(f"创建输出目录: {output_dir}")
                 except Exception as e:
                     return -handle_error(ERROR_PERMISSION, f"创建输出目录失败: {str(e)}")
 
             # 验证目录权限
             if not os.access(output_dir, os.W_OK):
-                error(f"错误: 无写入权限到目录: {output_dir}")
+                logger.error(f"错误: 无写入权限到目录: {output_dir}")
                 sys.exit(1)
 
             # 写入临时文件
@@ -1163,7 +1137,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 
                 # 无论是否在Docker环境，都进行额外的文件系统刷新
                 wait_time = max(0.05, min(0.3, len(files) / 3000))  # 进一步降低等待时间和比例因子
-                debug(f"写入临时文件后等待文件系统刷新... ({wait_time}秒)")
+                logger.debug(f"写入临时文件后等待文件系统刷新... ({wait_time}秒)")
                 time.sleep(wait_time)
                 subprocess.run(['sync'], check=False)
                 
@@ -1173,18 +1147,18 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     os.fsync(dir_fd)
                     os.close(dir_fd)
                 except Exception as e:
-                    debug(f"目录同步失败: {str(e)}")
+                    logger.debug(f"目录同步失败: {str(e)}")
                 
                 # 验证临时文件是否存在且大小正确
                 if not os.path.exists(temp_output):
                     return -handle_error(ERROR_IO, f"临时文件写入后不存在: {temp_output}")
                 temp_size = os.path.getsize(temp_output)
-                info(f"成功写入临时文件: {temp_output}, 大小: {temp_size} bytes")
+                logger.info(f"成功写入临时文件: {temp_output}, 大小: {temp_size} bytes")
                 # 如果是测试且文件大小为0，创建一个非空文件
                 if temp_size == 0 and os.environ.get('DEBUG_EMPTY_SNAPSHOT') == '1':
                     with open(temp_output, 'wb') as f:
                         f.write(b'test_data\x00')
-                    debug(f"测试模式: 已填充空临时文件: {temp_output}")
+                    logger.debug(f"测试模式: 已填充空临时文件: {temp_output}")
             except Exception as e:
                 return -handle_error(ERROR_IO, f"写入临时文件失败: {str(e)}")
             
@@ -1197,15 +1171,15 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 try:
                     # 重命名前再次检查临时文件是否存在
                     if not os.path.exists(temp_output):
-                        error(f"错误: 重命名前临时文件不存在: {temp_output}")
+                        logger.error(f"错误: 重命名前临时文件不存在: {temp_output}")
                         # 尝试恢复临时文件（如果可能）
                         if os.path.exists(output_file + '.bak'):
-                            warn(f"尝试从备份恢复临时文件...")
+                            logger.warning(f"尝试从备份恢复临时文件...")
                             try:
                                 os.rename(output_file + '.bak', temp_output)
-                                info(f"成功恢复临时文件: {temp_output}")
+                                logger.info(f"成功恢复临时文件: {temp_output}")
                             except Exception as e:
-                                error(f"恢复临时文件失败: {str(e)}")
+                                logger.error(f"恢复临时文件失败: {str(e)}")
                         else:
                             # 创建一个临时备份文件
                             dummy_content = b'dummy_data\x00' if len(files) == 0 else b'\x00'.join(files[:10]) + b'\x00'
@@ -1218,14 +1192,14 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                         backup_file = output_file + '.bak.' + str(int(time.time()))
                         try:
                             os.rename(output_file, backup_file)
-                            info(f"已备份目标文件到: {backup_file}")
+                            logger.info(f"已备份目标文件到: {backup_file}")
                         except Exception as e:
-                            error(f"备份目标文件失败: {str(e)}")
+                            logger.error(f"备份目标文件失败: {str(e)}")
                             try:
                                 os.remove(output_file)
-                                info(f"移除已存在的目标文件: {output_file}")
+                                logger.info(f"移除已存在的目标文件: {output_file}")
                             except Exception as e2:
-                                error(f"移除目标文件失败: {str(e2)}")
+                                logger.error(f"移除目标文件失败: {str(e2)}")
 
                     os.rename(temp_output, output_file)
                     # 强制刷新文件系统缓存 - 增强版 (修复macOS上的文件识别问题) (修复macOS上的文件识别问题)
@@ -1239,7 +1213,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     
                     # 无论是否在Docker环境，都进行额外的文件系统刷新
                     wait_time = max(0.05, min(0.3, file_count / 3000))  # 进一步降低等待时间和比例因子
-                    debug(f"重命名后等待文件系统刷新... ({wait_time}秒)")
+                    logger.debug(f"重命名后等待文件系统刷新... ({wait_time}秒)")
                     time.sleep(wait_time)
                     subprocess.run(['sync'], check=False)
                     
@@ -1249,28 +1223,28 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                         os.fsync(dir_fd)
                         os.close(dir_fd)
                     except Exception as e:
-                        debug(f"目录同步失败: {str(e)}")
+                        logger.debug(f"目录同步失败: {str(e)}")
                     
                     # 验证文件是否存在且大小不为0
                     if os.path.exists(output_file):
                         output_size = os.path.getsize(output_file)
                         if output_size > 0:
                             rename_success = True
-                            info(f"成功重命名临时文件: {temp_output} -> {output_file}")
-                            debug(f"目标文件大小: {output_size} bytes")
+                            logger.info(f"成功重命名临时文件: {temp_output} -> {output_file}")
+                            logger.debug(f"目标文件大小: {output_size} bytes")
                             break
                         else:
-                            warn(f"重命名后文件为空 (大小: {output_size} bytes) (尝试 {attempt+1}/{max_rename_retries})")
+                            logger.warning(f"重命名后文件为空 (大小: {output_size} bytes) (尝试 {attempt+1}/{max_rename_retries})")
                     else:
-                        warn(f"重命名后文件不存在 (尝试 {attempt+1}/{max_rename_retries})")
+                        logger.warning(f"重命名后文件不存在 (尝试 {attempt+1}/{max_rename_retries})")
 
                     # 输出调试信息
-                    debug(f"临时文件状态: {os.path.exists(temp_output)}，大小: {os.path.getsize(temp_output) if os.path.exists(temp_output) else 0}")
-                    debug(f"目标文件状态: {os.path.exists(output_file)}，大小: {os.path.getsize(output_file) if os.path.exists(output_file) else 0}")
-                    debug(f"输出目录内容: {os.listdir(output_dir) if os.path.exists(output_dir) else '目录不存在'}")
+                    logger.debug(f"临时文件状态: {os.path.exists(temp_output)}，大小: {os.path.getsize(temp_output) if os.path.exists(temp_output) else 0}")
+                    logger.debug(f"目标文件状态: {os.path.exists(output_file)}，大小: {os.path.getsize(output_file) if os.path.exists(output_file) else 0}")
+                    logger.debug(f"输出目录内容: {os.listdir(output_dir) if os.path.exists(output_dir) else '目录不存在'}")
                     time.sleep(2 * (attempt + 1))  # 指数退避延迟
                 except Exception as e:
-                    error(f"重命名文件失败 (尝试 {attempt+1}/{max_rename_retries}): {str(e)}")
+                    logger.error(f"重命名文件失败 (尝试 {attempt+1}/{max_rename_retries}): {str(e)}")
                     time.sleep(2 * (attempt + 1))  # 指数退避延迟
 
             if not rename_success:
@@ -1279,7 +1253,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 for copy_attempt in range(3):
                     try:
                         if not os.path.exists(temp_output):
-                            error(f"临时文件不存在，无法复制")
+                            logger.error(f"临时文件不存在，无法复制")
                             break
                         
                         with open(temp_output, 'rb') as f_src:
@@ -1298,22 +1272,22 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                         # 验证复制是否成功
                         if os.path.exists(output_file) and os.path.getsize(output_file) == os.path.getsize(temp_output):
                             copy_success = True
-                            info(f"成功手动复制文件内容到: {output_file}")
+                            logger.info(f"成功手动复制文件内容到: {output_file}")
                             # 额外的文件系统同步，确保文件在Docker环境中可见
                             try:
                                 # 同步整个目录
                                 dir_fd = os.open(output_dir, os.O_RDONLY)
                                 os.fsync(dir_fd)
                                 os.close(dir_fd)
-                                info(f"成功同步目录: {output_dir}")
+                                logger.info(f"成功同步目录: {output_dir}")
                             except Exception as e:
-                                warn(f"目录同步失败: {str(e)}")
+                                logger.warning(f"目录同步失败: {str(e)}")
                             break
                         else:
-                            warn(f"手动复制后文件大小不匹配，尝试第 {copy_attempt+2} 次...")
+                            logger.warning(f"手动复制后文件大小不匹配，尝试第 {copy_attempt+2} 次...")
                             time.sleep(2)
                     except Exception as e:
-                        error(f"手动复制失败 (尝试 {copy_attempt+1}/3): {str(e)}")
+                        logger.error(f"手动复制失败 (尝试 {copy_attempt+1}/3): {str(e)}")
                         time.sleep(2)
             
             # 如果重命名成功，不需要检查copy_success
@@ -1332,7 +1306,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
             # 针对大型目录增加额外处理（文件数超过1000的目录视为大型目录）
             is_large_directory = file_count > 1000
             if is_large_directory:
-                debug(f"检测到大型目录：{file_count}个文件，将增加检查次数和等待时间")
+                logger.debug(f"检测到大型目录：{file_count}个文件，将增加检查次数和等待时间")
                 max_check_retries = 8  # 为大型目录增加检查次数
             
             # 额外检查特殊目录（包含非ASCII字符的目录，如中文目录名）
@@ -1343,12 +1317,12 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
             except UnicodeEncodeError:
                 contains_special_chars = True
             if contains_special_chars:
-                debug(f"检测到包含特殊字符的目录：{dir}，将增加额外的同步操作")
+                logger.debug(f"检测到包含特殊字符的目录：{dir}，将增加额外的同步操作")
                 
             # 增加针对双重挑战目录的特殊处理（同时是大型目录且包含特殊字符）
             is_double_challenge = is_large_directory and contains_special_chars
             if is_double_challenge:
-                debug(f"检测到双重挑战目录（大型+特殊字符）：{dir}，将提供最高级别的处理")
+                logger.debug(f"检测到双重挑战目录（大型+特殊字符）：{dir}，将提供最高级别的处理")
                 max_check_retries = 10  # 优化：将双重挑战目录的检查次数从15减少到10
             
             for check_attempt in range(max_check_retries):
@@ -1371,7 +1345,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                         else:
                             base_wait_time = 1.0 if (is_large_directory or contains_special_chars) else 0.5
                             wait_time = base_wait_time + (check_attempt * 0.5)
-                        debug(f"Docker环境: 增强版检查前等待文件系统刷新... ({wait_time}秒)")
+                        logger.debug(f"Docker环境: 增强版检查前等待文件系统刷新... ({wait_time}秒)")
                         time.sleep(wait_time)
                         
                         # 同步目录
@@ -1384,7 +1358,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             # 针对不同类型目录的额外同步
                             if is_double_challenge:
                                 # 为双重挑战目录提供最高级别的同步处理
-                                debug("对双重挑战目录（大型+特殊字符）执行增强同步...")
+                                logger.debug("对双重挑战目录（大型+特殊字符）执行增强同步...")
                                 
                                 # 针对WebDAV路径设置更低的等待时间和更少的同步次数
                                 if is_webdav:
@@ -1402,25 +1376,25 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                                     dir_fd = os.open(output_dir, os.O_RDONLY)
                                     os.fsync(dir_fd)
                                     os.close(dir_fd)
-                                    debug(f"双重挑战目录同步轮次 {i+1}/{sync_count} 完成")
+                                    logger.debug(f"双重挑战目录同步轮次 {i+1}/{sync_count} 完成")
                             elif is_large_directory or contains_special_chars:
                                 # 对于大型目录或特殊字符目录，执行额外的同步操作
-                                debug("对大型目录或特殊字符目录执行额外的目录同步...")
+                                logger.debug("对大型目录或特殊字符目录执行额外的目录同步...")
                                 time.sleep(0.3)  # 从0.5秒减少到0.3秒
                                 dir_fd = os.open(output_dir, os.O_RDONLY)  # 重新打开文件描述符
                                 os.fsync(dir_fd)
                                 os.close(dir_fd)
                         except Exception as e:
-                            debug(f"目录同步失败: {str(e)}")
+                            logger.debug(f"目录同步失败: {str(e)}")
                     
                     if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
                         output_size = os.path.getsize(output_file)
-                        debug(f"增强版检查通过 (尝试 {check_attempt+1}/{max_check_retries}): 文件存在，大小: {output_size} bytes")
+                        logger.debug(f"增强版检查通过 (尝试 {check_attempt+1}/{max_check_retries}): 文件存在，大小: {output_size} bytes")
                         check_success = True
                         break
                     else:
-                        warn(f"增强版检查失败 (尝试 {check_attempt+1}/{max_check_retries}): 文件不存在或为空: {output_file}")
-                        debug(f"目录内容: {os.listdir(output_dir) if os.path.exists(output_dir) else '目录不存在'}")
+                        logger.warning(f"增强版检查失败 (尝试 {check_attempt+1}/{max_check_retries}): 文件不存在或为空: {output_file}")
+                        logger.debug(f"目录内容: {os.listdir(output_dir) if os.path.exists(output_dir) else '目录不存在'}")
                         # 根据目录类型设置不同的等待时间
                         if is_double_challenge:
                             # 为双重挑战目录设置最长等待时间
@@ -1428,7 +1402,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                                 sleep_time = 0.8  # 为WebDAV路径的双重挑战目录设置更低的等待时间
                             else:
                                 sleep_time = 1.5  # 优化：从3秒减少到1.5秒
-                            debug(f"双重挑战目录增强处理：增加等待时间至 {sleep_time} 秒")
+                            logger.debug(f"双重挑战目录增强处理：增加等待时间至 {sleep_time} 秒")
                         elif is_large_directory or contains_special_chars:
                             if is_webdav:
                                 sleep_time = 0.5  # 为WebDAV路径的大型或特殊字符目录设置更低的等待时间
@@ -1441,52 +1415,52 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                                 sleep_time = 0.5  # 优化：从1秒减少到0.5秒
                         time.sleep(sleep_time)
                 except Exception as e:
-                    warn(f"增强版检查异常 (尝试 {check_attempt+1}/{max_check_retries}): {str(e)}")
+                    logger.warning(f"增强版检查异常 (尝试 {check_attempt+1}/{max_check_retries}): {str(e)}")
                     time.sleep(1)
             
             if not check_success:
                 # 增加更多调试信息，帮助诊断问题
-                debug(f"最终检查失败 - 当前工作目录: {os.getcwd()}")
-                debug(f"最终检查失败 - 文件绝对路径: {os.path.abspath(output_file)}")
-                debug(f"最终检查失败 - 输出目录权限: {os.stat(output_dir).st_mode if os.path.exists(output_dir) else '目录不存在'}")
+                logger.debug(f"最终检查失败 - 当前工作目录: {os.getcwd()}")
+                logger.debug(f"最终检查失败 - 文件绝对路径: {os.path.abspath(output_file)}")
+                logger.debug(f"最终检查失败 - 输出目录权限: {os.stat(output_dir).st_mode if os.path.exists(output_dir) else '目录不存在'}")
                 # 尝试列出输出目录的详细信息
                 try:
                     dir_list = subprocess.run(['ls', '-la', output_dir], capture_output=True, text=True).stdout
-                    debug(f"输出目录内容详细列表:\n{dir_list}")
+                    logger.debug(f"输出目录内容详细列表:\n{dir_list}")
                 except Exception as e:
-                    debug(f"无法列出目录内容: {str(e)}")
+                    logger.debug(f"无法列出目录内容: {str(e)}")
                 
-                warn(f"警告：最终检查时目标文件不存在或为空: {output_file}")
+                logger.warning(f"警告：最终检查时目标文件不存在或为空: {output_file}")
                 return -handle_error(ERROR_IO, "最终检查时目标文件不存在或为空")
             
-            info(f"扫描完成：{dir_count} 个目录，{file_count} 个文件，忽略 {skipped_small} 个小文件，排除 {excluded_dir_count} 个目录")
+            logger.info(f"扫描完成：{dir_count} 个目录，{file_count} 个文件，忽略 {skipped_small} 个小文件，排除 {excluded_dir_count} 个目录")
             
             # 记录被忽略的小文件数量
             if skipped_small > 0:
                 # 检测是否是WebDAV路径
                 is_webdav_path = dir.startswith(('/vol02/CloudDrive/WebDAV', '/Volumes/CloudDrive/WebDAV'))
                 if is_webdav_path:
-                    info(f"[WebDAV] 扫描目录 {dir}: 忽略了 {skipped_small} 个小于 {min_size_bytes/1024/1024:.2f} MB 的小文件")
+                    logger.info(f"[WebDAV] 扫描目录 {dir}: 忽略了 {skipped_small} 个小于 {min_size_bytes/1024/1024:.2f} MB 的小文件")
                 else:
-                    info(f"扫描目录 {dir}: 忽略了 {skipped_small} 个小于 {min_size_bytes} 字节的小文件")
+                    logger.info(f"扫描目录 {dir}: 忽略了 {skipped_small} 个小于 {min_size_bytes} 字节的小文件")
             
             # 记录被忽略的辅助文件数量
             if skipped_auxiliary > 0:
-                info(f"[WebDAV] 扫描目录 {dir}: 忽略了 {skipped_auxiliary} 个辅助文件（海报、字幕等）")
+                logger.info(f"[WebDAV] 扫描目录 {dir}: 忽略了 {skipped_auxiliary} 个辅助文件（海报、字幕等）")
 
             # 计算快照文件的校验和
             checksum = calculate_checksum(output_file)
             if checksum:
-                info(f"快照校验和 ({output_file}): {checksum}")
+                logger.info(f"快照校验和 ({output_file}): {checksum}")
             
             # 返回前再次确认文件存在
             if not os.path.exists(output_file):
-                error(f"警告：即将返回但文件突然不存在: {output_file}")
+                logger.error(f"警告：即将返回但文件突然不存在: {output_file}")
                 return -handle_error(ERROR_IO, "返回前文件突然不存在")
             
             return file_count  # 返回文件数量
         except Exception as e:
-            error(f"生成快照过程中发生错误: {str(e)}")
+            logger.error(f"生成快照过程中发生错误: {str(e)}")
             return -handle_error(ERROR_UNKNOWN, "生成快照过程中发生错误")
     
     # 记录开始时间用于调试
@@ -1500,7 +1474,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
     def _snapshot_wrapper():
         result = _generate_snapshot_core()
         execution_time = time.time() - snapshot_start_time
-        logger.debug(f"_generate_snapshot_core 执行完成，返回值: {result}，耗时: {execution_time:.2f}秒")
+        logger.logger.debug(f"_generate_snapshot_core 执行完成，返回值: {result}，耗时: {execution_time:.2f}秒")
         return result
     
     # 使用run_with_timeout执行核心逻辑，应用传入的timeout参数
@@ -1516,7 +1490,7 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
     # 这解决了超时检测机制误报的问题
     if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
         output_size = os.path.getsize(output_file)
-        logger.info(f"快照文件实际存在且大小有效: {output_file}, 大小: {output_size} bytes")
+        logger.logger.info(f"快照文件实际存在且大小有效: {output_file}, 大小: {output_size} bytes")
         
         # 如果系统报告超时但文件已存在，覆盖结果为成功
         if result == -ERROR_TIMEOUT:
@@ -1527,17 +1501,17 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                     content = f.read()
                     if content:
                         file_count = len(content.split(b'\x00')) - 1  # 减去最后的空分隔符
-                        logger.info(f"快照文件包含 {file_count} 个文件记录")
+                        logger.logger.info(f"快照文件包含 {file_count} 个文件记录")
                         result = file_count  # 返回实际的文件数量
             except Exception as e:
-                logger.error(f"尝试读取已生成的快照文件失败: {str(e)}")
+                logger.logger.error(f"尝试读取已生成的快照文件失败: {str(e)}")
     # 只有当快照文件不存在或为空且结果是超时时，才记录错误
     elif result == -ERROR_TIMEOUT:
         result = -handle_error(ERROR_TIMEOUT, f"生成快照超时（{timeout}秒）")
     
     # 记录最终结果和执行时间
     execution_time = time.time() - snapshot_start_time
-    logger.debug(f"generate_snapshot 函数执行完成，最终返回值: {result}，总耗时: {execution_time:.2f}秒")
+    logger.logger.debug(f"generate_snapshot 函数执行完成，最终返回值: {result}，总耗时: {execution_time:.2f}秒")
     
     return result
 
@@ -1561,7 +1535,7 @@ def generate_incremental_snapshot(dir, output_file, previous_snapshot, scan_dela
     # 核心逻辑函数
     def _generate_incremental_snapshot_core():
         try:
-            info(f"开始生成增量快照: {dir} -> {output_file}")
+            logger.info(f"开始生成增量快照: {dir} -> {output_file}")
             
             # 读取之前的快照
             previous_files = set()
@@ -1571,7 +1545,7 @@ def generate_incremental_snapshot(dir, output_file, previous_snapshot, scan_dela
                     if content:
                         previous_files = set(content.split(b'\x00'))
             except Exception as e:
-                error(f"读取之前的快照失败: {str(e)}")
+                logger.error(f"读取之前的快照失败: {str(e)}")
                 return -handle_error(ERROR_IO, "读取之前的快照失败")
             
             # 生成当前快照（临时文件）
@@ -1580,7 +1554,7 @@ def generate_incremental_snapshot(dir, output_file, previous_snapshot, scan_dela
             
             # 检查生成是否成功
             if current_count < 0:
-                error(f"生成当前快照失败: {current_count}")
+                logger.error(f"生成当前快照失败: {current_count}")
                 if os.path.exists(temp_current):
                     os.remove(temp_current)
                 return current_count
@@ -1593,7 +1567,7 @@ def generate_incremental_snapshot(dir, output_file, previous_snapshot, scan_dela
                     if content:
                         current_files = set(content.split(b'\x00'))
             except Exception as e:
-                error(f"读取当前快照失败: {str(e)}")
+                logger.error(f"读取当前快照失败: {str(e)}")
                 os.remove(temp_current)
                 return -handle_error(ERROR_IO, "读取当前快照失败")
             
@@ -1625,7 +1599,7 @@ def generate_incremental_snapshot(dir, output_file, previous_snapshot, scan_dela
             
             # 如果没有变更，返回0
             if not added and not deleted:
-                info("没有检测到变更，跳过创建增量快照")
+                logger.info("没有检测到变更，跳过创建增量快照")
                 os.remove(temp_current)
                 return 0
             
@@ -1637,9 +1611,9 @@ def generate_incremental_snapshot(dir, output_file, previous_snapshot, scan_dela
                 # 强制刷新文件系统缓存
                 subprocess.run(['sync'], check=False)
                 
-                info(f"增量快照生成完成，新增: {len(added)}，删除: {len(deleted)}")
+                logger.info(f"增量快照生成完成，新增: {len(added)}，删除: {len(deleted)}")
             except Exception as e:
-                error(f"写入增量快照失败: {str(e)}")
+                logger.error(f"写入增量快照失败: {str(e)}")
                 os.remove(temp_current)
                 return -handle_error(ERROR_IO, "写入增量快照失败")
             
@@ -1648,7 +1622,7 @@ def generate_incremental_snapshot(dir, output_file, previous_snapshot, scan_dela
             
             return len(added) + len(deleted)
         except Exception as e:
-            error(f"生成增量快照过程中发生错误: {str(e)}")
+            logger.error(f"生成增量快照过程中发生错误: {str(e)}")
             return -handle_error(ERROR_UNKNOWN, "生成增量快照过程中发生错误")
     
     # 直接运行核心生成增量快照逻辑，超时控制由调用方管理
@@ -1670,7 +1644,7 @@ def apply_incremental_snapshot(base_snapshot, incremental_snapshot, output_file)
     # 核心逻辑函数
     def _apply_incremental_snapshot_core():
         try:
-            info(f"开始应用增量快照: {base_snapshot} + {incremental_snapshot} -> {output_file}")
+            logger.info(f"开始应用增量快照: {base_snapshot} + {incremental_snapshot} -> {output_file}")
             
             # 读取基础快照
             base_files = set()
@@ -1680,7 +1654,7 @@ def apply_incremental_snapshot(base_snapshot, incremental_snapshot, output_file)
                     if content:
                         base_files = set(content.split(b'\x00'))
             except Exception as e:
-                error(f"读取基础快照失败: {str(e)}")
+                logger.error(f"读取基础快照失败: {str(e)}")
                 return False
             
             # 读取增量快照
@@ -1702,7 +1676,7 @@ def apply_incremental_snapshot(base_snapshot, incremental_snapshot, output_file)
                         elif item and current_section == 'deleted':
                             deleted.add(item)
             except Exception as e:
-                error(f"读取增量快照失败: {str(e)}")
+                logger.error(f"读取增量快照失败: {str(e)}")
                 return False
             
             # 应用变更
@@ -1726,24 +1700,20 @@ def apply_incremental_snapshot(base_snapshot, incremental_snapshot, output_file)
                 # 重命名临时文件
                 os.rename(temp_output, output_file)
                 
-                info(f"成功应用增量快照，更新后文件数量: {len(base_files)}")
+                logger.info(f"成功应用增量快照，更新后文件数量: {len(base_files)}")
             except Exception as e:
-                error(f"写入更新后的快照失败: {str(e)}")
+                logger.error(f"写入更新后的快照失败: {str(e)}")
                 if os.path.exists(temp_output):
                     os.remove(temp_output)
                 return False
             
             return True
         except Exception as e:
-            error(f"应用增量快照过程中发生错误: {str(e)}")
+            logger.error(f"应用增量快照过程中发生错误: {str(e)}")
             return False
     
-    # 检测Docker环境并设置超时时间
-    is_docker = is_docker_environment()
-    
-    # 设置超时时间 - Docker环境下设置为90秒（1.5分钟），默认环境下设置为300秒（5分钟）
-    # 优化：大幅降低Docker环境下的超时时间，避免目录间处理延迟过长
-    timeout_seconds = 90 if is_docker else 300
+    # 使用统一的超时配置
+    timeout_seconds = timeout_config.get_timeout('medium')  # 中等超时：30秒（Docker环境会自动调整）
     
     # 使用run_with_timeout执行核心逻辑
     result = run_with_timeout(
@@ -1774,7 +1744,7 @@ def compare_snapshots(old_file, new_file, diff_type):
                     if content:
                         old_files = set(content.split(b'\x00'))
             except Exception as e:
-                error(f"读取旧快照失败: {str(e)}")
+                logger.error(f"读取旧快照失败: {str(e)}")
                 sys.exit(handle_error(ERROR_IO, "读取旧快照失败"))
             
             # 读取新快照
@@ -1785,7 +1755,7 @@ def compare_snapshots(old_file, new_file, diff_type):
                     if content:
                         new_files = set(content.split(b'\x00'))
             except Exception as e:
-                error(f"读取新快照失败: {str(e)}")
+                logger.error(f"读取新快照失败: {str(e)}")
                 sys.exit(handle_error(ERROR_IO, "读取新快照失败"))
             
             # 移除空字符串（如果存在）
@@ -1798,19 +1768,19 @@ def compare_snapshots(old_file, new_file, diff_type):
             
             # 根据diff_type输出结果
             if diff_type == 'added':
-                info(f"新增文件 ({len(added)}):")
+                logger.info(f"新增文件 ({len(added)}):")
                 for file in sorted(added):
                     print(file.decode('utf-8', errors='replace'))
             elif diff_type == 'deleted':
-                info(f"删除文件 ({len(deleted)}):")
+                logger.info(f"删除文件 ({len(deleted)}):")
                 for file in sorted(deleted):
                     print(file.decode('utf-8', errors='replace'))
             elif diff_type == 'changed':
-                info(f"变更摘要: 新增 {len(added)}, 删除 {len(deleted)}")
+                logger.info(f"变更摘要: 新增 {len(added)}, 删除 {len(deleted)}")
             
             sys.exit(ERROR_OK)
         except Exception as e:
-            error(f"比较快照过程中发生错误: {str(e)}")
+            logger.error(f"比较快照过程中发生错误: {str(e)}")
             sys.exit(handle_error(ERROR_UNKNOWN, "比较快照过程中发生错误"))
     
     # 检测Docker环境并设置超时时间
@@ -1822,7 +1792,7 @@ def compare_snapshots(old_file, new_file, diff_type):
     
     # 超时后的处理函数
     def _timeout_handler():
-        error(f"比较快照超时（{timeout_seconds}秒）")
+        logger.error(f"比较快照超时（{timeout_seconds}秒）")
         sys.exit(handle_error(ERROR_TIMEOUT, f"比较快照超时（{timeout_seconds}秒）"))
     
     # 使用run_with_timeout执行核心逻辑
@@ -1871,15 +1841,15 @@ if __name__ == "__main__":
         exit_code = generate_snapshot(dir, output, scan_delay, max_files, skip_large, large_threshold, min_size, min_size_mb)
         if exit_code == ERROR_NO_FILES:
             # 没有文件时返回特殊状态码，而不是默认成功
-            info("没有文件被包含在快照中")
+            logger.info("没有文件被包含在快照中")
             sys.exit(ERROR_NO_FILES)
         elif exit_code > 0:
             # 如果exit_code是正数，则它表示文件计数
-            info(f"快照生成完成，共 {exit_code} 个文件")
+            logger.info(f"快照生成完成，共 {exit_code} 个文件")
             sys.exit(ERROR_OK)
         elif exit_code == 0:
             # 如果exit_code为0，可能是错误情况
-            error(f"快照生成返回了0文件计数")
+            logger.error(f"快照生成返回了0文件计数")
             sys.exit(ERROR_IO)
         else:
             # 处理其他错误码
@@ -1915,7 +1885,7 @@ if __name__ == "__main__":
         
         count = generate_incremental_snapshot(dir, output, previous_snapshot, scan_delay, max_files, skip_large, large_threshold, min_size, min_size_mb)
         if count >= 0:
-            info(f"增量快照生成完成，共记录 {count} 个变更")
+            logger.info(f"增量快照生成完成，共记录 {count} 个变更")
             sys.exit(ERROR_OK)
         else:
             sys.exit(handle_error(ERROR_UNKNOWN, "增量快照生成失败"))

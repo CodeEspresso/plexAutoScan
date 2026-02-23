@@ -24,18 +24,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def info(msg):
-    logger.info(msg)
-
-def warn(msg):
-    logger.warning(msg)
-
-def error(msg):
-    logger.error(msg)
-
-def debug(msg):
-    logger.debug(msg)
-
 class PlexCompare:
     def __init__(self, target_dir, library_cache, min_file_size_mb=10):
         # 确保路径是UTF-8编码的字符串
@@ -57,12 +45,12 @@ class PlexCompare:
             with open(self.library_cache, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            error(f"加载Plex媒体库缓存失败: {str(e)}")
+            logger.error(f"加载Plex媒体库缓存失败: {str(e)}")
             return {}
 
     def scan_local_files(self):
         """扫描本地文件系统"""
-        info(f"开始扫描本地目录: {self.target_dir}")
+        logger.info(f"开始扫描本地目录: {self.target_dir}")
         start_time = time.time()
         count = 0
         skipped_count = 0
@@ -83,27 +71,27 @@ class PlexCompare:
                             self.skipped_files.add(skipped_file.lower())
                             skipped_count += 1
                     except Exception as e:
-                        warn(f"无法访问文件: {file_path} - {str(e)}")
+                        logger.warning(f"无法访问文件: {file_path} - {str(e)}")
         except Exception as e:
-            error(f"扫描本地文件时发生错误: {str(e)}")
+            logger.error(f"扫描本地文件时发生错误: {str(e)}")
 
         elapsed = time.time() - start_time
-        info(f"本地文件扫描完成，找到 {count} 个符合大小要求的文件 (耗时: {elapsed:.2f} 秒)")
+        logger.info(f"本地文件扫描完成，找到 {count} 个符合大小要求的文件 (耗时: {elapsed:.2f} 秒)")
         if skipped_count > 0:
-            info(f"跳过了 {skipped_count} 个小于最小文件大小的文件")
-        debug(f"本地文件集合大小: {len(self.local_files)}")
+            logger.info(f"跳过了 {skipped_count} 个小于最小文件大小的文件")
+        logger.debug(f"本地文件集合大小: {len(self.local_files)}")
 
     def compare_with_plex(self):
         """比较本地文件与Plex媒体库"""
         if not self.plex_libraries:
-            error("没有加载到Plex媒体库数据，无法进行比较")
+            logger.error("没有加载到Plex媒体库数据，无法进行比较")
             return False
 
         if not self.local_files:
-            error("没有扫描到本地文件，无法进行比较")
+            logger.error("没有扫描到本地文件，无法进行比较")
             return False
 
-        info("开始比较本地文件与Plex媒体库...")
+        logger.info("开始比较本地文件与Plex媒体库...")
         missing_in_plex = []
 
         # 注意：由于Plex媒体库缓存只包含库信息而没有文件列表
@@ -117,26 +105,26 @@ class PlexCompare:
         total_missing = len(missing_in_plex)
         total_skipped = len(self.skipped_files)
 
-        info(f"比较结果: 本地文件总数={total_local}, 标记为需要扫描的文件数={total_missing}, 跳过的小文件数={total_skipped}")
+        logger.info(f"比较结果: 本地文件总数={total_local}, 标记为需要扫描的文件数={total_missing}, 跳过的小文件数={total_skipped}")
 
         if total_missing > 0:
-            info(f"需要触发Plex扫描的文件数量: {total_missing}")
+            logger.info(f"需要触发Plex扫描的文件数量: {total_missing}")
             self.trigger_plex_scan()
         else:
-            info("没有发现需要扫描的新文件")
+            logger.info("没有发现需要扫描的新文件")
 
         return True
 
     def trigger_plex_scan(self):
         """触发Plex扫描"""
-        info("触发Plex媒体库扫描...")
+        logger.info("触发Plex媒体库扫描...")
         try:
             # 从环境变量获取Plex配置
             plex_url = os.environ.get('PLEX_URL', 'http://localhost:32400')
             plex_token = os.environ.get('PLEX_TOKEN', '')
 
             if not plex_token:
-                error("未找到Plex Token，请在环境变量中设置PLEX_TOKEN")
+                logger.error("未找到Plex Token，请在环境变量中设置PLEX_TOKEN")
                 return
 
             # 构建Plex扫描命令
@@ -156,12 +144,12 @@ class PlexCompare:
             )
 
             if result.returncode == 0:
-                info("Plex扫描命令已发送成功")
+                logger.info("Plex扫描命令已发送成功")
             else:
-                warn(f"Plex扫描命令执行失败: {result.stderr}")
+                logger.warning(f"Plex扫描命令执行失败: {result.stderr}")
 
         except Exception as e:
-            error(f"触发Plex扫描时发生错误: {str(e)}")
+            logger.error(f"触发Plex扫描时发生错误: {str(e)}")
 
     def run(self):
         """运行完整的比较流程"""
@@ -184,11 +172,11 @@ if __name__ == "__main__":
 
     # 验证参数
     if not os.path.isdir(target_dir):
-        error(f"目标目录不存在或不是有效的目录: {target_dir}")
+        logger.error(f"目标目录不存在或不是有效的目录: {target_dir}")
         sys.exit(1)
 
     if not os.path.isfile(library_cache):
-        error(f"Plex媒体库缓存文件不存在: {library_cache}")
+        logger.error(f"Plex媒体库缓存文件不存在: {library_cache}")
         sys.exit(1)
 
     # 创建比较对象并运行

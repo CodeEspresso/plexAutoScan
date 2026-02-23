@@ -9,7 +9,9 @@ import re
 import json
 from pathlib import Path
 import logging
-from .timeout_decorator import run_with_timeout
+from typing import Optional, Dict, Any, Union
+from .timeout_decorator import run_with_timeout, timeout_config
+from .environment import env_detector
 
 class Config:
     """配置管理类"""
@@ -67,70 +69,48 @@ class Config:
     def _parse_env_file(self, file_path):
         """解析.env格式的配置文件
         
-        增强版：通过执行shell脚本来处理配置文件中的条件逻辑
+        增强版：使用纯Python解析，避免命令注入风险
         """
-        # 检查是否在Docker环境中
-        is_docker = self.is_docker
-        # 设置超时时间：Docker环境300秒，非Docker环境600秒
-        timeout_seconds = 300 if is_docker else 600
+        # 使用统一的超时配置
+        timeout_seconds = timeout_config.get_timeout('long')  # 长时间超时：10分钟
         
         def _parse_env_file_core():
             """核心解析逻辑"""
             try:
-                # 创建一个临时shell脚本，包含配置文件中的所有内容和打印配置的命令
-                import tempfile
-                with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_script:
-                    # 添加shebang
-                    temp_script.write('#!/bin/bash\n')
-                    # 添加配置文件内容
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        temp_script.write(f.read())
-                    
-                    # 确保所有变量都被导出，并添加打印所有变量的命令
-                    temp_script.write('\n\n# 导出所有设置的变量并打印\nfor var in $(set -o posix; set | grep -v "^_=" | cut -d= -f1); do\n    export $var\ndone\n\nenv | grep -v "^_="')
-                    
-                    temp_script_path = temp_script.name
-                
-                # 执行临时脚本并获取输出
-                import subprocess
-                result = subprocess.run(
-                    ['bash', temp_script_path],
-                    capture_output=True,
-                    text=True
-                )
-                
-                # 清理临时文件
-                os.unlink(temp_script_path)
-                
-                # 解析输出结果
-                if result.returncode == 0:
-                    for line in result.stdout.split('\n'):
+                # 使用纯Python解析，避免命令注入风险
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    for line in f:
                         line = line.strip()
-                        if not line:
+                        
+                        # 跳过注释和空行
+                        if not line or line.startswith('#'):
                             continue
                         
                         # 解析键值对
                         if '=' in line:
                             key, value = line.split('=', 1)
+                            key = key.strip()
+                            value = value.strip()
+                            
                             # 移除引号
-                            value = value.strip('"')
-                            value = value.strip("'")
+                            if value.startswith('"') and value.endswith('"'):
+                                value = value[1:-1]
+                            elif value.startswith("'") and value.endswith("'"):
+                                value = value[1:-1]
+                            
+                            # 处理变量替换（如 ${VAR} 或 $VAR）
+                            value = self._expand_variables(value)
+                            
                             self._config[key] = value
-                    
-                    # 打印加载的配置以供调试
-                    self.logger.debug(f"从配置文件加载了 {len(self._config)} 个配置项")
-                    for key, value in self._config.items():
-                        # 不打印敏感信息
-                        if 'TOKEN' not in key and 'PASSWORD' not in key:
-                            self.logger.debug(f"  {key}={value}")
-                else:
-                    self.logger.error(f"执行配置脚本失败: {result.stderr}")
-                    # 回退到简单解析
-                    self._simple_parse_env_file(file_path)
+                
+                # 打印加载的配置以供调试
+                self.logger.debug(f"从配置文件加载了 {len(self._config)} 个配置项")
+                for key, value in self._config.items():
+                    # 不打印敏感信息
+                    if 'TOKEN' not in key and 'PASSWORD' not in key:
+                        self.logger.debug(f"  {key}={value}")
             except Exception as e:
                 self.logger.error(f"解析配置文件失败 {file_path}: {str(e)}")
-                # 回退到简单解析
-                self._simple_parse_env_file(file_path)
         
         # 使用超时控制执行核心解析逻辑
         try:
@@ -141,8 +121,27 @@ class Config:
                 error_message=f"解析配置文件 {file_path} 超时"
             )
         except TimeoutError:
-            self.logger.error(f"解析配置文件超时({timeout_seconds}秒)，使用回退方案")
-            self._simple_parse_env_file(file_path)
+            self.logger.error(f"解析配置文件超时({timeout_seconds}秒)")
+    
+    def _expand_variables(self, value: str) -> str:
+        """展开配置值中的环境变量引用
+        
+        Args:
+            value (str): 配置值
+            
+        Returns:
+            str: 展开后的值
+        """
+        import re
+        
+        # 匹配 ${VAR} 或 $VAR 格式
+        pattern = r'\$\{([^}]+)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)'
+        
+        def replace_var(match):
+            var_name = match.group(1) or match.group(2)
+            return os.environ.get(var_name, '')
+        
+        return re.sub(pattern, replace_var, value)
             
     def _simple_parse_env_file(self, file_path):
         """简单解析.env格式的配置文件（回退方案）"""
@@ -265,20 +264,7 @@ class Config:
     @property
     def is_docker(self):
         """是否在Docker环境中"""
-        # 检查环境变量
-        if self.get_bool('DOCKER_ENV', False):
-            return True
-        # 检查Docker特有的文件
-        if os.path.exists('/.dockerenv'):
-            return True
-        # 检查cgroup信息
-        try:
-            with open('/proc/1/cgroup', 'r') as f:
-                if 'docker' in f.read():
-                    return True
-        except Exception:
-            pass
-        return False
+        return env_detector.is_docker()
     
     @property
     def enable_plex(self):
@@ -353,7 +339,15 @@ class Config:
             if prod_base_path:
                 # 如果PROD_BASE_PATH是单个路径，直接返回
                 if prod_base_path.strip() and not any(sep in prod_base_path for sep in [',', ';', '\n', ' ']):
-                    # 尝试直接返回PROD_BASE_PATH下的所有子目录作为挂载点，添加异常处理
+                    # 飞牛OS特定处理：对于/vol02/CloudDrive/WebDAV路径，采用更宽松的处理方式
+                    if prod_base_path.startswith('/vol02/CloudDrive/WebDAV'):
+                        self.logger.debug(f"飞牛OS Docker环境：特殊处理基础路径 {prod_base_path}")
+                        
+                        # 对于飞牛OS，我们假设路径是有效的，直接返回
+                        # 这是因为飞牛OS作为NAS系统，挂载点可能需要更长时间来准备
+                        return [prod_base_path]
+                    
+                    # 其他Docker环境的常规处理
                     try:
                         if os.path.exists(prod_base_path):
                             subdirs = []
@@ -367,10 +361,11 @@ class Config:
                                     except Exception as e:
                                         self.logger.warning(f"无法访问目录项 {item}: {str(e)}")
 
-                            # 30秒超时控制
+                            # 飞牛OS优化：延长超时时间到60秒
+                            timeout_seconds = 60
                             run_with_timeout(
                                 list_dir_safely,
-                                timeout_seconds=30,
+                                timeout_seconds=timeout_seconds,
                                 logger=self.logger,
                                 operation_name=f"遍历目录 {prod_base_path}"
                             )

@@ -2,9 +2,13 @@
 
 # entrypoint.sh - Docker容器入口点脚本
 
-# 设置中文支持
+# 设置中文支持和时区
 export LANG=zh_CN.UTF-8
 export LC_ALL=zh_CN.UTF-8
+# 确保Python环境使用正确的时区
+export TZ=Asia/Shanghai
+# 设置Python的时区环境变量
+export PYTHON_TZ=Asia/Shanghai
 
 # 打印环境信息
 if [ "$DEBUG" = "1" ]; then
@@ -27,21 +31,33 @@ else
     echo "[WARN] 未找到配置文件 /data/config.env，使用默认环境变量..."
 fi
 
-# 确保日志目录存在
+# 确保日志目录存在 - 针对飞牛OS优化路径处理
 mkdir -p /data/logs
+chmod 777 /data/logs
 
 # 检查并确保快照目录存在
 if [ -n "$SNAPSHOT_DIR" ]; then
     echo "[INFO] 确保快照目录 $SNAPSHOT_DIR 存在..."
     mkdir -p "$SNAPSHOT_DIR"
+    chmod 777 "$SNAPSHOT_DIR"
 else
     echo "[INFO] 使用默认快照目录 /data/snapshots..."
     mkdir -p /data/snapshots
+    chmod 777 /data/snapshots
     export SNAPSHOT_DIR=/data/snapshots
 fi
 
 # 检查并确保输出目录存在
 mkdir -p /data/output
+chmod 777 /data/output
+
+# 飞牛OS特定：确保挂载点目录存在并可访问
+if [ -d /vol02/CloudDrive/WebDAV ]; then
+    echo "[INFO] 验证挂载点 /vol02/CloudDrive/WebDAV 可访问"
+    ls -la /vol02/CloudDrive/WebDAV > /dev/null 2>&1 && echo "[INFO] 挂载点访问成功" || echo "[WARN] 挂载点访问可能存在权限问题"
+else
+    echo "[WARN] 挂载点 /vol02/CloudDrive/WebDAV 不存在，将在运行时尝试访问"
+fi
 
 # 显示Python和依赖版本信息
 echo "[INFO] Python版本：$(/venv/bin/python --version)"

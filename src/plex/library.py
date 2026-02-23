@@ -10,6 +10,7 @@ import json
 import time
 import logging
 import re
+import random
 from pathlib import Path
 from urllib.parse import quote
 
@@ -18,7 +19,7 @@ from urllib.parse import quote
 from ..utils.logger import RobustLogger
 from ..utils.config import Config
 from ..utils.path_utils import normalize_path, verify_path, PathUtils
-from ..utils.timeout_decorator import run_with_timeout
+from ..utils.timeout_decorator import run_with_timeout, timeout_config
 from .api import PlexAPI
 
 # 初始化日志记录器，使用与主程序相同的名称以确保日志正确输出
@@ -364,9 +365,8 @@ class PlexLibraryManager:
         Returns:
             dict: 下载和提取结果
         """
-        # 根据是否在Docker环境设置不同的超时时间
-        is_docker = PathUtils.is_docker_environment()
-        timeout_seconds = 300 if is_docker else 600  # Docker环境300秒(5分钟)，默认环境600秒(10分钟)
+        # 使用统一的超时配置
+        timeout_seconds = timeout_config.get_timeout('long')  # 长时间超时：10分钟
         
         logger.info(f"开始下载并提取文件，超时设置为 {timeout_seconds} 秒")
         
@@ -465,9 +465,8 @@ class PlexLibraryManager:
         Returns:
             dict: 下载结果
         """
-        # 根据是否在Docker环境设置不同的超时时间
-        is_docker = PathUtils.is_docker_environment()
-        timeout_seconds = 600 if is_docker else 1200  # Docker环境600秒(10分钟)，默认环境1200秒(20分钟)
+        # 使用统一的超时配置
+        timeout_seconds = timeout_config.get_timeout('very_long')  # 超长超时：30分钟
         
         logger.info(f"开始分页下载XML数据，超时设置为 {timeout_seconds} 秒")
         
@@ -536,10 +535,12 @@ class PlexLibraryManager:
         Returns:
             int: 触发扫描的文件数量
         """
-        # 检测是否是WebDAV路径
-        is_webdav_path = directory.startswith(('/vol02/CloudDrive/WebDAV', '/Volumes/CloudDrive/WebDAV'))
-        if is_webdav_path:
-            logger.info(f"[PLEX更新] [WebDAV路径] 检测到WebDAV路径: {directory}")
+        # 检测是否为宿主机SMB挂载的路径（在Docker环境中表现为本地路径）
+        # 在Docker容器内，这些路径通过卷挂载方式访问，作为本地路径处理
+        # 但由于宿主机实际上是SMB远程挂载，仍需注意访问频率以避免连接被拒绝
+        is_smb_mounted_path = directory.startswith(('/vol02/CloudDrive/WebDAV', '/Volumes/CloudDrive/WebDAV'))
+        if is_smb_mounted_path:
+            logger.info(f"[PLEX更新] [SMB挂载路径] 检测到宿主机SMB挂载的路径（Docker内为本地路径）: {directory}")
         logger.info(f"[PLEX更新] 接收到更新请求: 目录={directory}, 文件数量={len(file_paths) if file_paths else 0}")
         
         if not self.is_initialized():
@@ -558,43 +559,44 @@ class PlexLibraryManager:
             updated_count = 0
             
             # 检查Plex API状态
-            logger.info(f"[PLEX更新] Plex API状态: available={self.plex_api is not None}, has_scan_library={hasattr(self.plex_api, 'scan_library') if self.plex_api else False}")
+            logger.info(f"[PLEX更新] Plex API状态: available={self.plex_api is not None}, "
+                       f"has_scan_library={hasattr(self.plex_api, 'scan_library') if self.plex_api else False}")
             
             # 查找匹配的媒体库
             logger.info(f"[PLEX更新] 开始查找匹配的媒体库: {directory}")
             library = self.find_deepest_matching_library(directory)
             
-            # 增强WebDAV路径的媒体库匹配逻辑
-            if not library and is_webdav_path:
-                logger.info(f"[PLEX更新] [WebDAV路径] 尝试针对WebDAV路径的增强匹配逻辑")
-                # 针对WebDAV路径的特殊匹配逻辑
+            # 增强SMB挂载路径的媒体库匹配逻辑
+            if not library and is_smb_mounted_path:
+                logger.info("[PLEX更新] [SMB挂载路径] 尝试针对SMB挂载路径的增强匹配逻辑")
+                # 针对SMB挂载路径的特殊匹配逻辑
                 # 1. 尝试直接匹配目录结构中的上层目录
-                web_dav_path_parts = directory.split('/')
+                smb_path_parts = directory.split('/')
                 # 提取主要分类（如'电影'、'电视剧'等）
                 category_match = None
-                for part in web_dav_path_parts:
+                for part in smb_path_parts:
                     if part in ['电影', '电视剧', '纪录片', '音乐']:
                         category_match = part
                         break
                 
                 if category_match:
-                    logger.info(f"[PLEX更新] [WebDAV路径] 找到分类: {category_match}，尝试基于分类匹配媒体库")
+                    logger.info(f"[PLEX更新] [SMB挂载路径] 找到分类: {category_match}，尝试基于分类匹配媒体库")
                     for lib in self.libraries:
                         lib_name = lib.get('name', '').lower()
                         if category_match.lower() in lib_name:
-                            logger.info(f"[PLEX更新] [WebDAV路径] 分类匹配成功：媒体库'{lib.get('name')}'与分类'{category_match}'匹配")
+                            logger.info(f"[PLEX更新] [SMB挂载路径] 分类匹配成功：媒体库'{lib.get('name')}'与分类'{category_match}'匹配")
                             library = lib
                             break
                 
                 # 2. 如果分类匹配失败，尝试更宽松的目录名匹配
                 if not library:
                     directory_name = os.path.basename(directory)
-                    logger.info(f"[PLEX更新] [WebDAV路径] 尝试更宽松的目录名匹配: '{directory_name}'")
+                    logger.info(f"[PLEX更新] [SMB挂载路径] 尝试更宽松的目录名匹配: '{directory_name}'")
                     for lib in self.libraries:
                         lib_name = lib.get('name', '').lower()
-                        # 对于WebDAV路径，允许更宽松的匹配，只要目录名包含在媒体库名中或媒体库名包含在目录名中
+                        # 对于SMB挂载路径，允许更宽松的匹配，只要目录名包含在媒体库名中或媒体库名包含在目录名中
                         if directory_name.lower() in lib_name or lib_name in directory_name.lower():
-                            logger.info(f"[PLEX更新] [WebDAV路径] 宽松匹配成功：媒体库'{lib.get('name')}'与目录名'{directory_name}'匹配")
+                            logger.info(f"[PLEX更新] [SMB挂载路径] 宽松匹配成功：媒体库'{lib.get('name')}'与目录名'{directory_name}'匹配")
                             library = lib
                             break
             
@@ -674,20 +676,20 @@ class PlexLibraryManager:
             
             # 使用Plex API触发扫描操作
             if self.plex_api and hasattr(self.plex_api, 'scan_library'):
-                # 对于WebDAV路径，调整增量更新逻辑
-                if is_webdav_path:
-                    # 增加WebDAV路径的日志记录
-                    logger.info(f"[PLEX更新] [WebDAV路径] 处理WebDAV路径: {directory}，媒体库: {library_name}")
+                # 对于SMB挂载路径，调整增量更新逻辑
+                if is_smb_mounted_path:
+                    # 增加SMB挂载路径的日志记录
+                    logger.info(f"[PLEX更新] [SMB挂载路径] 处理SMB挂载路径: {directory}，媒体库: {library_name}")
                     
-                    # 对于WebDAV路径，可以考虑降低增量更新的敏感度，增加强制扫描的概率
+                    # 对于SMB挂载路径，可以考虑降低增量更新的敏感度，增加强制扫描的概率
                     # 例如，每处理10次相同路径，就强制扫描一次
-                    web_dav_path_key = f"webdav_path_{directory}"
-                    web_dav_process_count = getattr(self, f"_{web_dav_path_key}_count", 0)
-                    web_dav_process_count += 1
-                    setattr(self, f"_{web_dav_path_key}_count", web_dav_process_count)
+                    smb_path_key = f"smb_path_{directory}"
+                    smb_process_count = getattr(self, f"_{smb_path_key}_count", 0)
+                    smb_process_count += 1
+                    setattr(self, f"_{smb_path_key}_count", smb_process_count)
                     
-                    if web_dav_process_count % 10 == 0:
-                        logger.info(f"[PLEX更新] [WebDAV路径] 路径已处理10次，强制触发扫描以确保更新")
+                    if smb_process_count % 10 == 0:
+                        logger.info("[PLEX更新] [SMB挂载路径] 路径已处理10次，强制触发扫描以确保更新")
                         use_incremental_update = False
                 
                 # 如果启用了增量更新
@@ -777,14 +779,14 @@ class PlexLibraryManager:
                     
                     # 处理需要扫描的文件
                     if files_to_scan:
-                        # 对于WebDAV路径，调整单文件扫描参数
-                        if is_webdav_path:
-                            logger.info(f"[PLEX更新] [WebDAV路径] 调整WebDAV路径的扫描参数")
-                            # 临时覆盖配置，为WebDAV路径使用更合适的参数
+                        # 对于SMB挂载路径，调整单文件扫描参数
+                        if is_smb_mounted_path:
+                            logger.info("[PLEX更新] [SMB挂载路径] 调整SMB挂载路径的扫描参数")
+                            # 临时覆盖配置，为SMB挂载路径使用更合适的参数
                             original_scan_delay = self.config._config.get('SCAN_DELAY_BETWEEN_FILES', '1.0')
                             original_batch_size = self.config._config.get('SCAN_BATCH_SIZE', '10')
                             
-                            # 为WebDAV路径设置更小的批处理大小和更长的延迟
+                            # 为SMB挂载路径设置更小的批处理大小和更长的延迟，避免SMB连接被拒绝
                             # 注意：Config类使用内部的_config字典存储配置
                             self.config._config['SCAN_BATCH_SIZE'] = '5'  # 更小的批处理大小
                             self.config._config['SCAN_DELAY_BETWEEN_FILES'] = '2.0'  # 更长的延迟
@@ -836,21 +838,36 @@ class PlexLibraryManager:
                     
                     # 记录详细的请求信息
                     plex_url = getattr(self.plex_api, 'plex_url', 'unknown')
-                    logger.info(f"[PLEX更新] 准备向Plex服务器发送请求: {plex_url}/library/sections/{library_id}/refresh?path={directory}")
+                    logger.info(f"[PLEX更新] 准备向Plex服务器发送请求: {plex_url}/library/sections/{library_id}/refresh"
+                               f"?path={directory}")
                     
-                    # 对于WebDAV路径，增加重试逻辑
-                    max_retries = 3
+                    # 对于SMB挂载路径，使用增强的重试逻辑
+                    # 从配置中获取网络路径专用的重试参数，默认为3次重试
+                    max_retries = self.config.get_int('NETWORK_PATH_SCAN_MAX_RETRIES', 3)
+                    base_wait_time = self.config.get_float('NETWORK_PATH_SCAN_BASE_WAIT_TIME', 1.0)  # 基础等待时间(秒)
                     retry_count = 0
                     scan_result = False
                     
+                    logger.debug(f"[PLEX更新] [SMB挂载路径] 配置的重试参数: max_retries={max_retries}, "
+                               f"base_wait_time={base_wait_time}")
+                    
                     while retry_count < max_retries and not scan_result:
+                        attempt = retry_count + 1
+                        logger.info(f"[PLEX更新] [SMB挂载路径] 执行扫描请求 (尝试 {attempt}/{max_retries})，目录: {directory}")
+                        
                         # 执行扫描请求
                         scan_result = self.plex_api.scan_library(library_id, directory)
                         
-                        if not scan_result and retry_count < max_retries - 1:
+                        if scan_result:
+                            logger.debug(f"[PLEX更新] [SMB挂载路径] 扫描请求成功 (尝试 {attempt}/{max_retries})")
+                        elif retry_count < max_retries - 1:
                             retry_count += 1
-                            wait_time = 2 * retry_count  # 指数退避
-                            logger.warning(f"[PLEX更新] [WebDAV路径] 扫描请求失败，{wait_time}秒后重试 (尝试 {retry_count}/{max_retries})")
+                            # 使用指数退避策略，结合随机因子避免重试风暴
+                            wait_time = base_wait_time * (2 ** retry_count) + random.uniform(0, 1)  # 添加随机抖动
+                            logger.warning(f"[PLEX更新] [SMB挂载路径] 扫描请求失败 (尝试 {attempt}/{max_retries})，"
+                                         f"{wait_time:.2f}秒后重试")
+                            logger.debug(f"[PLEX更新] [SMB挂载路径] 重试参数: retry_count={retry_count}, "
+                                         f"wait_time={wait_time:.2f}, base_wait_time={base_wait_time}")
                             time.sleep(wait_time)
                     
                     # 记录请求结果
@@ -858,9 +875,19 @@ class PlexLibraryManager:
                         updated_count = len(file_paths)
                         logger.info(f"[PLEX更新] ✅ 已向Plex服务器发送扫描请求，媒体库'{library_name}'已触发扫描")
                         logger.info(f"[PLEX更新] 扫描目录: {directory}，相关文件数量: {updated_count}")
-                        logger.debug(f"[PLEX更新] 文件示例: {file_paths[:3] if len(file_paths) > 3 else file_paths}")
+                        logger.debug(f"[PLEX更新] 文件示例: "
+                                   f"{file_paths[:3] if len(file_paths) > 3 else file_paths}")
+                        # 对于SMB挂载路径，额外记录成功的扫描参数
+                        if is_smb_mounted_path:
+                            logger.debug(f"[PLEX更新] [SMB挂载路径] 扫描成功参数: 总尝试次数={retry_count + 1}/{max_retries}, "
+                                       f"目录={directory}")
                     else:
-                        logger.warning(f"[PLEX更新] ❌ 扫描请求发送失败")
+                        logger.warning(f"[PLEX更新] ❌ 扫描请求发送失败，已尝试{retry_count + 1}次")
+                        # 对于SMB挂载路径，额外记录失败的详细信息
+                        if is_smb_mounted_path:
+                            logger.warning("[PLEX更新] [SMB挂载路径] 所有重试均失败，可能是网络问题或Plex服务器响应超时")
+                            logger.debug(f"[PLEX更新] [SMB挂载路径] 扫描失败参数: max_retries={max_retries}, "
+                                         f"base_wait_time={base_wait_time}, directory={directory}")
             else:
                 logger.warning("[PLEX更新] Plex API不可用或缺少scan_library方法")
                 # 降级方案：记录需要更新的文件
@@ -961,18 +988,35 @@ class PlexLibraryManager:
             logger.warning("[PLEX更新] Plex API缺少scan_library方法，无法触发单文件扫描")
             return 0
         
-        # 检测是否包含WebDAV路径（更通用的检测方法）
-        contains_webdav_path = any('webdav' in fp.lower() for fp in file_paths)
-        if contains_webdav_path:
-            logger.info(f"[PLEX更新] [WebDAV路径] 检测到包含WebDAV路径的文件列表，共{len(file_paths)}个文件")
+        # SMB挂载路径检测（在Docker环境中表现为本地路径）
+        smb_patterns = ['webdav', 'cloudrive']  # 可配置更多SMB路径模式
+        contains_smb_path = any(
+            any(pattern in fp.lower() for pattern in smb_patterns) for fp in file_paths
+        )
+        if contains_smb_path:
+            logger.info(f"[PLEX更新] [SMB挂载路径] 检测到包含SMB挂载路径的文件列表，" \
+                       f"共{len(file_paths)}个文件")
+            # 记录第一个SMB挂载路径作为示例
+            first_smb_path = next(
+                (fp for fp in file_paths if any(pattern in fp.lower() for pattern in smb_patterns)),
+                None
+            )
+            if first_smb_path:
+                logger.debug(f"[PLEX更新] [SMB挂载路径] 路径示例: {first_smb_path}")
+                # 记录路径模式匹配信息
+                matched_patterns = [pattern for pattern in smb_patterns if pattern in first_smb_path.lower()]
+                logger.debug(f"[PLEX更新] [SMB挂载路径] 匹配的模式: {matched_patterns}")
         
         # 去重处理，避免重复扫描相同的文件路径
         unique_file_paths = list(set(file_paths))
         
-        # 对于WebDAV路径，增加特殊的文件类型过滤
-        if contains_webdav_path:
+        # 对于SMB挂载路径，增加特殊的文件类型过滤，优化扫描效率
+        if contains_smb_path:
             # 定义常见的辅助文件扩展名（海报、字幕等）
-            auxiliary_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.nfo', '.srt', '.ass', '.sub', '.idx'}
+            auxiliary_extensions = {
+                '.jpg', '.jpeg', '.png', '.gif', '.nfo',
+                '.srt', '.ass', '.sub', '.idx'
+            }
             
             # 过滤辅助文件，只扫描主要媒体文件
             main_media_files = []
@@ -986,11 +1030,18 @@ class PlexLibraryManager:
                     main_media_files.append(file_path)
             
             # 记录过滤信息
-            logger.info(f"[PLEX更新] [WebDAV路径] 过滤辅助文件: 保留{len(main_media_files)}个媒体文件，忽略{len(auxiliary_files)}个辅助文件（海报、字幕等）")
+            logger.info(f"[PLEX更新] [SMB挂载路径] 过滤辅助文件: 保留{len(main_media_files)}个媒体文件，" 
+                       f"忽略{len(auxiliary_files)}个辅助文件（海报、字幕等）")
             
             # 使用过滤后的文件列表
             unique_file_paths = main_media_files
-        logger.info(f"[PLEX更新] 开始触发单文件扫描，文件数量: {len(unique_file_paths)} (原始数量: {len(file_paths)}, 去重后减少: {len(file_paths) - len(unique_file_paths)}个)")
+        logger.info(f"[PLEX更新] 开始触发单文件扫描，文件数量: {len(unique_file_paths)} "
+                   f"(原始数量: {len(file_paths)}, 去重后减少: {len(file_paths) - len(unique_file_paths)}个)")
+        
+        # 为SMB挂载路径添加额外的调试信息
+        if contains_smb_path:
+            logger.debug(f"[PLEX更新] [SMB挂载路径] 前3个文件示例: " \
+                       f"{unique_file_paths[:3] if len(unique_file_paths) > 3 else unique_file_paths}")
         
         # 为了避免请求过于频繁，添加延迟和配置
         # 确保scan_delay是浮点数类型，避免类型比较错误
@@ -1007,13 +1058,19 @@ class PlexLibraryManager:
         
         # 快速路径：如果文件数量较少，跳过复杂的目录合并逻辑
         if len(unique_file_paths) < 50:
-            logger.info("[PLEX更新] 文件数量较少，使用简化的目录处理逻辑")
+            logger.info("[PLEX更新] 文件数量较少，" \
+                       "使用简化的目录处理逻辑")
             # 简单的目录去重
-            directories_to_scan = set(os.path.dirname(file_path) for file_path in unique_file_paths)
-            directories_list = [(dir_path, [f for f in unique_file_paths if os.path.dirname(f) == dir_path]) for dir_path in directories_to_scan]
-        elif contains_webdav_path:
-            # 对于包含WebDAV路径的大量文件，调整目录合并策略
-            logger.info(f"[PLEX更新] [WebDAV路径] 针对WebDAV路径调整目录合并策略")
+            directories_to_scan = set(
+                os.path.dirname(file_path) for file_path in unique_file_paths
+            )
+            directories_list = [
+                (dir_path, [f for f in unique_file_paths if os.path.dirname(f) == dir_path])
+                for dir_path in directories_to_scan
+            ]
+        elif contains_smb_path:
+            # 对于包含SMB挂载路径的大量文件，调整目录合并策略
+            logger.info("[PLEX更新] [SMB挂载路径] 针对SMB挂载路径调整目录合并策略")
             # 直接按电影目录级别合并，而不是深入处理每个文件
             directory_map = {}
             
@@ -1051,27 +1108,29 @@ class PlexLibraryManager:
                 # 记录目录映射
                 if target_dir not in directory_map:
                     directory_map[target_dir] = []
-                    logger.debug(f"[PLEX更新] [WebDAV路径] 添加新目录: {target_dir}")
+                    logger.debug(f"[PLEX更新] [SMB挂载路径] 添加新目录: {target_dir}")
                 else:
                     merged_count += 1
-                    logger.debug(f"[PLEX更新] [WebDAV路径] 合并到已有目录: {target_dir}")
+                    logger.debug(f"[PLEX更新] [SMB挂载路径] 合并到已有目录: {target_dir}")
                 
                 # 添加所有文件，而不仅是一个代表文件
                 # 这确保了所有剧集文件都能被正确处理
                 if file_path not in directory_map[target_dir]:
                     directory_map[target_dir].append(file_path)
-                    logger.debug(f"[PLEX更新] [WebDAV路径] 添加文件到目录映射: {file_path}")
+                    logger.debug(f"[PLEX更新] [SMB挂载路径] 添加文件到目录映射: " \
+                               f"{file_path}")
             
             # 将目录转换为列表
             directories_list = list(directory_map.items())
-            logger.info(f"[PLEX更新] [WebDAV路径] 电影目录合并完成: 处理{processed_count}个文件，合并{merged_count}个重复目录，共{len(directories_list)}个电影目录需要扫描")
+            logger.info(f"[PLEX更新] [SMB挂载路径] 电影目录合并完成: 处理{processed_count}个文件，" \
+                       f"合并{merged_count}个重复目录，共{len(directories_list)}个电影目录需要扫描")
             
-            # 对于WebDAV路径，应用专用批处理参数
+            # 对于SMB挂载路径，应用专用批处理参数，降低批处理大小和增加延迟以避免SMB连接被拒绝
             # 确保批处理大小不超过5，注意将配置值转换为整数
             scan_batch_size = min(int(self.config.get('SCAN_BATCH_SIZE', '10')), 5)
-            logger.info(f"[PLEX更新] [WebDAV路径] 应用WebDAV专用批处理设置：每批{scan_batch_size}个目录，扫描延迟2秒")
+            logger.info(f"[PLEX更新] [SMB挂载路径] 应用SMB挂载路径专用批处理设置：每批{scan_batch_size}个目录，扫描延迟2秒")
         else:
-            # 对于非WebDAV路径，使用标准批处理大小，注意将配置值转换为整数
+            # 对于非SMB挂载路径，使用标准批处理大小，注意将配置值转换为整数
             scan_batch_size = int(self.config.get('SCAN_BATCH_SIZE', '10'))
             
             # 智能目录合并：分析所有文件路径，找出最顶层的目录进行扫描
@@ -1126,7 +1185,8 @@ class PlexLibraryManager:
                 
                 # 更新目录映射为合并后的结果
                 directory_map = merged_directories
-                logger.info(f"[PLEX更新] 目录合并完成，减少了{len(sorted_directories) - len(directory_map)}个目录，剩余{len(directory_map)}个目录需要扫描")
+                logger.info(f"[PLEX更新] 目录合并完成，减少了{len(sorted_directories) - len(directory_map)}个目录，" \
+                           f"剩余{len(directory_map)}个目录需要扫描")
             
             # 将目录转换为列表
             directories_list = list(directory_map.items())
@@ -1154,7 +1214,7 @@ class PlexLibraryManager:
         logger.info(f"[PLEX更新] 将目录分为{len(dir_batches)}批进行处理")
         
         # 优化：根据文件数量和路径类型动态调整等待时间
-        def get_adjusted_delay(file_count, is_webdav=False, is_multi_level=False):
+        def get_adjusted_delay(file_count, is_smb_mounted_path=False, is_multi_level=False):
             # 基础延迟策略
             base_delay = 0.5  # 默认0.5秒
             if file_count <= 5:
@@ -1164,20 +1224,23 @@ class PlexLibraryManager:
             else:
                 base_delay = 2.0  # 大量文件
                 
-            # 对于WebDAV路径，增加延迟以适应网络延迟
-            if is_webdav:
-                base_delay *= 1.5  # WebDAV路径增加50%延迟
+            # 对于SMB挂载路径，使用更保守的延迟策略以避免连接被拒绝
+            if is_smb_mounted_path:
+                base_delay *= 2.0  # SMB挂载路径增加100%延迟，减少访问频率
+                logger.debug(f"[PLEX更新] [SMB挂载路径] 调整延迟为: {base_delay}秒（增加访问间隔以避免连接被拒绝）")
                 
             # 对于多层目录，进一步增加延迟以确保稳定性
             if is_multi_level:
                 base_delay *= 1.2  # 多层目录再增加20%延迟
+                logger.debug(f"[PLEX更新] [多层目录] 进一步调整延迟为: {base_delay}秒")
                 
             return base_delay
         
         # 处理每一批目录
         for batch_idx, dir_batch in enumerate(dir_batches):
             batch_total_files = sum(len(files) for _, files in dir_batch)
-            logger.info(f"[PLEX更新] 处理批次 {batch_idx + 1}/{len(dir_batches)}，包含{len(dir_batch)}个目录，{batch_total_files}个文件")
+            logger.info(f"[PLEX更新] 处理批次 {batch_idx + 1}/{len(dir_batches)}，包含{len(dir_batch)}个目录, "
+                       f"共{batch_total_files}个文件")
             
             # 优化：减少每个目录的详细日志，只记录批次级别摘要
             batch_success_count = 0
@@ -1198,18 +1261,20 @@ class PlexLibraryManager:
                             logger.info(f"[PLEX更新] 等待Plex服务器完成扫描，超时时间: {scan_timeout}秒")
                             completion_result = self.plex_api.wait_for_scan_completion(library_id, scan_timeout)
                             if completion_result:
-                                logger.info(f"[PLEX更新] ✅ Plex服务器扫描完成")
+                                logger.info("[PLEX更新] ✅ Plex服务器扫描完成")
                             else:
-                                logger.warning(f"[PLEX更新] ⏱️ Plex服务器扫描超时或未完成")
+                                logger.warning("[PLEX更新] ⏱️ Plex服务器扫描超时或未完成")
                         else:
                             # 优化：根据文件数量和路径类型动态调整等待时间
-                            # 检测当前目录是否包含WebDAV路径和多层结构
-                            dir_is_webdav = any(pattern in dir_path.lower() for pattern in ['webdav'])
+                            # 检测当前目录是否包含SMB挂载路径和多层结构
+                            # 使用统一的smb_patterns变量，确保检测标准一致
+                            dir_is_smb = any(pattern in dir_path.lower() for pattern in smb_patterns)
                             dir_is_multi_level = len(dir_path.split('/')) > 6
+                            logger.debug(f"[PLEX更新] 目录{dir_path} - SMB挂载路径: {dir_is_smb}, 多层结构: {dir_is_multi_level}")
                             
                             adjusted_delay = get_adjusted_delay(
                                 len(files_in_dir), 
-                                is_webdav=dir_is_webdav, 
+                                is_smb_mounted_path=dir_is_smb, 
                                 is_multi_level=dir_is_multi_level
                             )
                             
@@ -1222,20 +1287,26 @@ class PlexLibraryManager:
                     logger.error(f"[PLEX更新] 处理目录{dir_path}时发生错误: {str(e)}")
             
             # 批次处理完成后记录摘要
-            logger.info(f"[PLEX更新] 批次 {batch_idx + 1} 处理完成，成功扫描{batch_success_count}个文件，累计成功: {success_count}/{len(unique_file_paths)}")
+            logger.info(f"[PLEX更新] 批次 {batch_idx + 1} 处理完成，成功扫描{batch_success_count}个文件, "
+                       f"累计成功: {success_count}/{len(unique_file_paths)}")
             
             # 在批次之间添加延迟
             if batch_idx + 1 < len(dir_batches):
                 # 优化：根据当前批次大小、路径类型调整下一批次的等待时间
-                # 检查当前批次是否包含WebDAV路径和多层结构目录
-                batch_has_webdav = any(any(pattern in dir_path.lower() for pattern in ['webdav']) for dir_path, _ in dir_batch)
+                # 检查当前批次是否包含SMB挂载路径和多层结构目录
+                # 使用统一的smb_patterns变量，确保检测标准一致
+                batch_has_smb = any(
+                    any(pattern in dir_path.lower() for pattern in smb_patterns)
+                    for dir_path, _ in dir_batch
+                )
                 batch_has_multi_level = any(len(dir_path.split('/')) > 6 for dir_path, _ in dir_batch)
+                logger.debug(f"[PLEX更新] [批次延迟调整] 包含SMB挂载路径: {batch_has_smb}, 包含多层结构: {batch_has_multi_level}")
                 
                 adjusted_batch_delay = min(
                     scan_delay, 
                     get_adjusted_delay(
                         batch_total_files, 
-                        is_webdav=batch_has_webdav, 
+                        is_smb_mounted_path=batch_has_smb, 
                         is_multi_level=batch_has_multi_level
                     )
                 )

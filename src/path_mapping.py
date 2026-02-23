@@ -21,6 +21,7 @@ print(f'系统编码: {current_locale}', file=sys.stderr)
 
 # 导入日志模块 - 使用相对导入以适应Docker环境
 from .robust_logger import setup_robust_logging
+from .utils.environment import env_detector
 
 # 配置健壮日志
 try:
@@ -43,6 +44,9 @@ TEST_BASE_PATH = os.environ.get('TEST_BASE_PATH', '/Volumes/PSSD/项目/plexAuto
 DOCKER_ENV = os.environ.get('DOCKER_ENV', '0')
 TEST_ENV = os.environ.get('TEST_ENV', '0')
 
+# 使用统一的环境检测器
+IS_DOCKER = env_detector.is_docker()
+
 # 确保路径编码正确
 PATH_PREFIX = PATH_PREFIX.encode('utf-8').decode('utf-8') if PATH_PREFIX else PROD_BASE_PATH
 LOCAL_PATH_PREFIX = LOCAL_PATH_PREFIX.encode('utf-8').decode('utf-8') if LOCAL_PATH_PREFIX else PROD_BASE_PATH
@@ -50,7 +54,7 @@ TEST_LOCAL_PATH_PREFIX = TEST_LOCAL_PATH_PREFIX.encode('utf-8').decode('utf-8') 
 PROD_BASE_PATH = PROD_BASE_PATH.encode('utf-8').decode('utf-8')
 TEST_BASE_PATH = TEST_BASE_PATH.encode('utf-8').decode('utf-8')
 
-logger.info('Current environment: %s, Docker: %s' % ('test' if TEST_ENV == '1' else 'production', DOCKER_ENV))
+logger.info('Current environment: %s, Docker: %s' % ('test' if TEST_ENV == '1' else 'production', IS_DOCKER))
 logger.info('PATH_PREFIX: %s' % PATH_PREFIX)
 logger.info('LOCAL_PATH_PREFIX: %s' % LOCAL_PATH_PREFIX)
 logger.info('TEST_LOCAL_PATH_PREFIX: %s' % TEST_LOCAL_PATH_PREFIX)
@@ -98,7 +102,7 @@ def map_path(input_path):
     # 生产环境下的路径映射逻辑
     if TEST_ENV != '1':
         # 在Docker环境中，保留原始挂载路径，避免错误映射
-        if DOCKER_ENV == '1':
+        if IS_DOCKER:
             # 直接使用原始路径，Docker环境中的路径应该已经是正确挂载的
             mapped_path = normalized_path
             logger.debug(f'Docker环境中使用原始路径: {mapped_path}')
@@ -116,7 +120,7 @@ def map_path(input_path):
                 logger.info(f'尝试规范化为: {mapped_path}')
     else:
         # 测试环境下的路径映射逻辑
-        if DOCKER_ENV == '1':
+        if IS_DOCKER:
             logger.debug(f'In Docker environment, using input path directly: {normalized_path}')
             mapped_path = normalized_path
         else:
@@ -144,7 +148,7 @@ def map_path(input_path):
     logger.info(f'路径映射后 - mapped_path: {mapped_path}')
 
     # 验证映射后的路径是否存在
-    if DOCKER_ENV == '1':
+    if IS_DOCKER:
         # 在Docker环境中，检查路径是否存在
         if not os.path.exists(mapped_path):
             logger.warning(f'Docker环境中路径不存在: {mapped_path}')
