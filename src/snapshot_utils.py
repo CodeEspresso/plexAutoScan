@@ -1059,12 +1059,12 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                 else:
                     logger.info("未检测到SMB连接错误，连接保持良好")
 
-            # 排序并写入快照文件
-            files = sorted(file_paths)
+            # [MOD] 2026-02-24 性能优化：使用流式写入，减少内存占用 by AI
+            # 对于大文件列表，直接流式写入，避免内存峰值
             temp_output = output_file + ".tmp"
 
             # 即使有文件处理失败，也要尽可能保留已成功扫描的文件
-            if not files:
+            if not file_paths:
                 logger.info("没有文件需要写入快照，跳过创建空快照文件")
                 # 确保不会尝试创建或检查不存在的快照文件
                 if os.path.exists(temp_output):
@@ -1103,11 +1103,33 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
 
             # 写入临时文件
             try:
-                with open(temp_output, 'wb') as f:
-                    f.write(b'\x00'.join(files) + b'\x00')
-                    # 确保数据真正写入磁盘，不只是缓存
-                    f.flush()
-                    os.fsync(f.fileno())
+                # [MOD] 对于大文件列表，使用流式写入
+                if len(file_paths) > 50000:
+                    logger.info(f"大文件列表 ({len(file_paths)} 个)，使用流式写入")
+                    with open(temp_output, 'wb') as f:
+                        # 先排序文件路径
+                        sorted_paths = sorted(file_paths)
+                        # 流式写入，每批10000个文件
+                        batch_write_size = 10000
+                        for i in range(0, len(sorted_paths), batch_write_size):
+                            batch = sorted_paths[i:i+batch_write_size]
+                            f.write(b'\x00'.join(batch))
+                            if i + batch_write_size < len(sorted_paths):
+                                f.write(b'\x00')
+                            # 定期刷新
+                            if i > 0 and i % 50000 == 0:
+                                f.flush()
+                        f.write(b'\x00')
+                        f.flush()
+                        os.fsync(f.fileno())
+                else:
+                    # 小文件列表直接写入
+                    files = sorted(file_paths)
+                    with open(temp_output, 'wb') as f:
+                        f.write(b'\x00'.join(files) + b'\x00')
+                        # 确保数据真正写入磁盘，不只是缓存
+                        f.flush()
+                        os.fsync(f.fileno())
                 
                 # 强制刷新文件系统缓存 - 增强版
                 if sys.platform == 'darwin':  # macOS系统

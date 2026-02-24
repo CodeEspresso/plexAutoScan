@@ -81,6 +81,9 @@ class PlexAutoScan:
                 self.plex_api = PlexAPI(self.config)
                 self.logger.info("Plex API客户端初始化成功")
                 
+                # [MOD] 2026-02-24 将 Plex API 设置到 SnapshotManager，支持首次扫描对比 by AI
+                self.snapshot_manager.set_plex_api(self.plex_api)
+                
                 # 只有在Plex API初始化成功后才初始化媒体库管理器
                 try:
                     self.library_manager = PlexLibraryManager(self.config, self.plex_api)

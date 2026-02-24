@@ -29,7 +29,15 @@ logger = RobustLogger('snapshot')
 
 
 class SnapshotManager:
-    """快照管理器类，负责生成、验证和管理目录快照"""
+    """快照管理器类，负责生成、验证和管理目录快照
+    
+    [MOD] 2026-02-24 性能优化与误触发防护 by AI
+    - 添加快照备份机制
+    - 首次扫描支持与Plex对比
+    - 优化大文件列表处理性能
+    """
+    
+    SNAPSHOT_BACKUP_COUNT = 3
     
     def __init__(self, config=None):
         """初始化快照管理器
@@ -55,9 +63,18 @@ class SnapshotManager:
         
         # 确保快照目录存在
         ensure_directory(self.snapshot_dir)
+        
+        # [MOD] Plex API 引用，用于首次扫描时与 Plex 对比
+        self._plex_api = None
     
-    # 即将修改的符号: generate_snapshot方法（返回新增文件列表，而非首次扫描标志）
-    # 变更理由：通过"快照文件是否存在"判断首次扫描不可靠，应直接返回新增文件列表
+    def set_plex_api(self, plex_api):
+        """[MOD] 设置 Plex API 引用，用于首次扫描时与 Plex 对比
+        
+        Args:
+            plex_api: PlexAPI 实例
+        """
+        self._plex_api = plex_api
+        logger.debug("已设置 Plex API 引用，首次扫描时将与 Plex 对比")
     
     def generate_snapshot(self, directory_path, force_update=False):
         """生成目录快照并比较变化
@@ -69,6 +86,10 @@ class SnapshotManager:
         Returns:
             tuple: (快照文件路径, 快照内容, 是否成功, 新增文件列表)
                    新增文件列表包含本次扫描发现的新文件路径
+                   
+        [MOD] 2026-02-24 优化首次扫描逻辑 by AI
+        - 首次扫描时尝试从 Plex 获取已有文件列表进行对比
+        - 添加快照备份机制
         """
         from .timeout_decorator import run_with_timeout
         
@@ -82,9 +103,15 @@ class SnapshotManager:
                 snapshot_filename = self._get_snapshot_filename(verified_path)
                 snapshot_path = os.path.join(self.snapshot_dir, snapshot_filename)
                 
-                # 读取旧快照（如果存在）用于比较
+                # [MOD] 尝试从备份恢复快照
                 old_file_set = set()
                 has_old_snapshot = os.path.exists(snapshot_path)
+                
+                if not has_old_snapshot:
+                    has_old_snapshot = self._try_restore_from_backup(snapshot_path)
+                    if has_old_snapshot:
+                        logger.info(f"从备份恢复了快照文件: {snapshot_path}")
+                
                 if has_old_snapshot:
                     try:
                         with open(snapshot_path, 'r', encoding='utf-8') as f:
@@ -183,13 +210,24 @@ class SnapshotManager:
                     'min_file_size_mb': min_file_size_mb
                 }
                 
-                # 计算新增文件
+                # [MOD] 性能优化：使用生成器表达式构建集合
                 new_file_set = {f['path'] for f in files_with_details}
                 added_files = list(new_file_set - old_file_set)
                 removed_files = list(old_file_set - new_file_set)
                 
+                # [MOD] 首次扫描时与 Plex 对比，过滤已入库文件
+                is_first_scan = not has_old_snapshot
+                if is_first_scan and self._plex_api:
+                    added_files = self._filter_files_in_plex(verified_path, added_files, min_file_size_mb)
+                    if added_files:
+                        logger.info(f"首次扫描：与 Plex 对比后，发现 {len(added_files)} 个真正需要入库的新文件")
+                    else:
+                        logger.info("首次扫描：与 Plex 对比后，所有文件已存在于 Plex 中，无需扫描")
+                
                 # 记录变化情况
-                if not has_old_snapshot:
+                if is_first_scan and not self._plex_api:
+                    logger.info(f"首次扫描目录，建立基准快照，共 {len(files_with_details)} 个文件（未启用 Plex 对比）")
+                elif is_first_scan and self._plex_api:
                     logger.info(f"首次扫描目录，建立基准快照，共 {len(files_with_details)} 个文件")
                 elif added_files:
                     logger.info(f"检测到 {len(added_files)} 个新增文件")
@@ -197,6 +235,10 @@ class SnapshotManager:
                     logger.info(f"检测到 {len(removed_files)} 个删除文件")
                 if has_old_snapshot and not added_files and not removed_files:
                     logger.info("文件列表无变化")
+                
+                # [MOD] 保存快照前先备份旧快照
+                if has_old_snapshot and os.path.exists(snapshot_path):
+                    self._backup_snapshot(snapshot_path)
                 
                 # 保存新快照
                 try:
@@ -221,8 +263,163 @@ class SnapshotManager:
         snapshot_path, snapshot_content, is_success, added_files = result
         return snapshot_path, snapshot_content, is_success, added_files
     
-    # 即将修改的符号: _get_snapshot_filename方法（移除时间戳，使文件名稳定）
-    # 变更理由：快照文件名包含时间戳导致每次运行时文件名不同，使得首次扫描判断失效，Plex扫描永远被跳过
+    def _backup_snapshot(self, snapshot_path):
+        """[MOD] 备份快照文件
+        
+        Args:
+            snapshot_path (str): 快照文件路径
+        """
+        try:
+            if not os.path.exists(snapshot_path):
+                return
+            
+            # 生成备份文件名
+            backup_path = f"{snapshot_path}.bak"
+            
+            # 如果备份文件已存在，轮转备份
+            for i in range(self.SNAPSHOT_BACKUP_COUNT - 1, 0, -1):
+                old_backup = f"{snapshot_path}.bak{i}"
+                new_backup = f"{snapshot_path}.bak{i + 1}"
+                if os.path.exists(old_backup):
+                    if i == self.SNAPSHOT_BACKUP_COUNT - 1:
+                        os.remove(old_backup)
+                    else:
+                        shutil.move(old_backup, new_backup)
+            
+            # 将当前备份重命名为 .bak1
+            if os.path.exists(backup_path):
+                shutil.move(backup_path, f"{snapshot_path}.bak1")
+            
+            # 创建新备份
+            shutil.copy2(snapshot_path, backup_path)
+            logger.debug(f"已备份快照: {backup_path}")
+            
+        except Exception as e:
+            logger.warning(f"备份快照失败: {str(e)}")
+    
+    def _try_restore_from_backup(self, snapshot_path):
+        """[MOD] 尝试从备份恢复快照
+        
+        Args:
+            snapshot_path (str): 快照文件路径
+            
+        Returns:
+            bool: 是否成功恢复
+        """
+        try:
+            # 检查主备份文件
+            backup_path = f"{snapshot_path}.bak"
+            if os.path.exists(backup_path):
+                try:
+                    # 验证备份文件是否有效
+                    if self.verify_snapshot(backup_path):
+                        shutil.copy2(backup_path, snapshot_path)
+                        logger.info(f"从主备份恢复快照: {backup_path}")
+                        return True
+                except Exception:
+                    pass
+            
+            # 检查编号备份文件
+            for i in range(1, self.SNAPSHOT_BACKUP_COUNT + 1):
+                numbered_backup = f"{snapshot_path}.bak{i}"
+                if os.path.exists(numbered_backup):
+                    try:
+                        if self.verify_snapshot(numbered_backup):
+                            shutil.copy2(numbered_backup, snapshot_path)
+                            logger.info(f"从备份 {i} 恢复快照: {numbered_backup}")
+                            return True
+                    except Exception:
+                        continue
+            
+            return False
+            
+        except Exception as e:
+            logger.warning(f"从备份恢复快照失败: {str(e)}")
+            return False
+    
+    def _filter_files_in_plex(self, directory_path, file_paths, min_file_size_mb):
+        """[MOD] 过滤已在 Plex 中的文件，避免首次扫描误触发
+        
+        Args:
+            directory_path (str): 目录路径
+            file_paths (list): 文件路径列表
+            min_file_size_mb (float): 最小文件大小（MB）
+            
+        Returns:
+            list: 过滤后的文件路径列表（仅包含不在 Plex 中的文件）
+        """
+        if not self._plex_api or not file_paths:
+            return file_paths
+        
+        try:
+            # 尝试获取匹配的媒体库
+            from ..plex.library import PlexLibraryManager
+            library_manager = PlexLibraryManager(self.config, self._plex_api)
+            library = library_manager.find_deepest_matching_library(directory_path)
+            
+            if not library:
+                logger.debug(f"未找到匹配的 Plex 媒体库: {directory_path}，跳过过滤")
+                return file_paths
+            
+            library_id = library.get('id')
+            library_name = library.get('name')
+            library_type = library.get('type', 'movie')
+            logger.info(f"首次扫描：正在从 Plex 媒体库 '{library_name}' (类型: {library_type}) 获取已有文件列表...")
+            
+            # 从 Plex 获取文件列表
+            plex_files = self._plex_api.get_library_files(library_id)
+            
+            if plex_files is None or (isinstance(plex_files, list) and len(plex_files) == 0):
+                error_info = "返回 None 或空列表"
+                if plex_files is None:
+                    error_info = "P.get_library_files() 返回 None"
+                else:
+                    error_info = f"返回空列表（可能是媒体库类型不支持或 API 响应格式问题）"
+                logger.warning(f"从 Plex 获取文件列表失败或为空: {error_info}")
+                logger.warning(f"媒体库信息: ID={library_id}, Name={library_name}, Type={library_type}")
+                logger.debug("这可能是因为：1) 媒体库类型是电视剧/音乐，需要不同的 API 参数； 2) Plex API 响应格式变化")
+                return file_paths
+            
+            # [MOD] 性能优化：使用集合进行快速查找
+            plex_file_set = set()
+            for item in plex_files:
+                if 'path' in item:
+                    # 标准化路径用于比较
+                    normalized = self._normalize_path_for_comparison(item['path'])
+                    plex_file_set.add(normalized)
+            
+            logger.info(f"从 Plex 获取到 {len(plex_file_set)} 个已入库文件")
+            
+            # 过滤已入库文件
+            filtered_files = []
+            for file_path in file_paths:
+                normalized = self._normalize_path_for_comparison(file_path)
+                if normalized not in plex_file_set:
+                    filtered_files.append(file_path)
+            
+            return filtered_files
+            
+        except Exception as e:
+            logger.warning(f"与 Plex 对比时出错: {str(e)}，跳过过滤")
+            return file_paths
+    
+    def _normalize_path_for_comparison(self, path):
+        """[MOD] 标准化路径用于比较
+        
+        Args:
+            path (str): 原始路径
+            
+        Returns:
+            str: 标准化后的路径
+        """
+        try:
+            # 规范化路径
+            normalized = os.path.normpath(path)
+            # 转换为小写以确保大小写不敏感的比较
+            normalized = normalized.lower()
+            return normalized
+        except Exception:
+            return path.lower() if path else ''
     
     def _get_snapshot_filename(self, directory_path):
         """获取快照文件名

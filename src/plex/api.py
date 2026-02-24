@@ -366,6 +366,8 @@ class PlexAPI:
             
         Returns:
             list: 文件列表
+            
+        [MOD] 2026-02-24 修复：移除 type 参数限制，获取所有类型的媒体 by AI
         """
         cache_key = f'library_files_{library_id}'
         
@@ -376,23 +378,53 @@ class PlexAPI:
         
         # 发送API请求
         endpoint = f'/library/sections/{library_id}/all'
+        # [MOD] 移除 type 参数限制，获取所有类型的媒体（电影、电视剧、音乐等）
+        # 原来的 type: 1 只获取电影，导致电视剧目录返回空列表
         params = {
-            'includeGuids': 1,
-            'type': 1  # 仅获取电影，根据需要调整
+            'includeGuids': 1
         }
         
         result = self._make_request(endpoint, params=params)
         
         if 'error' in result:
+            logger.error(f"Plex API 返回错误: {result.get('error')}")
             return []
+        
+        # [MOD] 调试：记录 API 响应结构
+        if 'MediaContainer' in result:
+            mc = result['MediaContainer']
+            logger.debug(f"Plex API 响应: MediaContainer 包含键: {list(mc.keys())}")
+            if 'Metadata' in mc:
+                logger.debug(f"Metadata 数量: {len(mc['Metadata'])}")
+                if mc['Metadata']:
+                    first_item = mc['Metadata'][0]
+                    logger.debug(f"第一个 Metadata 项的键: {list(first_item.keys())}")
+                    logger.debug(f"第一个 Metadata 项的 type: {first_item.get('type')}")
+                    if 'Media' in first_item:
+                        logger.debug(f"第一个 Metadata 项包含 Media: {first_item['Media']}")
+                    else:
+                        logger.debug(f"第一个 Metadata 项不包含 Media 键")
+            else:
+                logger.debug("MediaContainer 不包含 Metadata 键")
+        else:
+            logger.debug(f"Plex API 响应不包含 MediaContainer: {list(result.keys())}")
         
         # 解析响应
         files = []
         try:
             if 'MediaContainer' in result and 'Metadata' in result['MediaContainer']:
                 for item in result['MediaContainer']['Metadata']:
-                    # 提取文件信息
-                    if 'Media' in item and item['Media']:
+                    item_type = item.get('type', '')
+                    
+                    # [MOD] 2026-02-24 支持电视剧类型 by AI
+                    # 电影/音乐：直接从 Media > Part 获取文件路径
+                    # 电视剧：需要从剧集获取季和集的信息
+                    if item_type == 'show':
+                        # 电视剧类型：需要获取每一集的文件信息
+                        show_files = self._get_show_files(item.get('ratingKey'))
+                        files.extend(show_files)
+                    elif 'Media' in item and item['Media']:
+                        # 电影/音乐类型：直接获取文件信息
                         media = item['Media'][0]
                         if 'Part' in media and media['Part']:
                             part = media['Part'][0]
@@ -412,6 +444,66 @@ class PlexAPI:
         self._save_to_cache(cache_key, files)
         
         logger.info(f"获取到媒体库{library_id}中的{len(files)}个文件")
+        return files
+    
+    def _get_show_files(self, show_rating_key):
+        """[MOD] 获取电视剧剧集的文件列表
+        
+        Args:
+            show_rating_key (str): 剧集的 ratingKey
+            
+        Returns:
+            list: 文件列表
+        """
+        files = []
+        try:
+            # 获取剧集的所有季
+            seasons_endpoint = f'/library/metadata/{show_rating_key}/children'
+            seasons_result = self._make_request(seasons_endpoint)
+            
+            if 'error' in seasons_result:
+                return files
+            
+            if 'MediaContainer' not in seasons_result or 'Metadata' not in seasons_result['MediaContainer']:
+                return files
+            
+            # 遍历每一季
+            for season in seasons_result['MediaContainer']['Metadata']:
+                season_key = season.get('ratingKey')
+                if not season_key:
+                    continue
+                
+                # 获取这一季的所有集
+                episodes_endpoint = f'/library/metadata/{season_key}/children'
+                episodes_result = self._make_request(episodes_endpoint)
+                
+                if 'error' in episodes_result:
+                    continue
+                
+                if 'MediaContainer' not in episodes_result or 'Metadata' not in episodes_result['MediaContainer']:
+                    continue
+                
+                # 遍历每一集，获取文件信息
+                for episode in episodes_result['MediaContainer']['Metadata']:
+                    if 'Media' in episode and episode['Media']:
+                        for media in episode['Media']:
+                            if 'Part' in media and media['Part']:
+                                for part in media['Part']:
+                                    files.append({
+                                        'id': episode.get('ratingKey'),
+                                        'title': episode.get('title'),
+                                        'type': 'episode',
+                                        'path': part.get('file'),
+                                        'size': part.get('size'),
+                                        'duration': media.get('duration'),
+                                        'added_at': self._convert_plex_timestamp(episode.get('addedAt'))
+                                    })
+            
+            logger.debug(f"获取剧集 {show_rating_key} 的文件列表: {len(files)} 个文件")
+            
+        except Exception as e:
+            logger.error(f"获取电视剧文件列表失败: {str(e)}")
+        
         return files
     
     def _convert_plex_timestamp(self, timestamp):

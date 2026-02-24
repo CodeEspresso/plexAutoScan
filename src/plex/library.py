@@ -909,6 +909,8 @@ class PlexLibraryManager:
             
         Returns:
             str: 校验和字符串
+            
+        [MOD] 2026-02-24 性能优化：使用增量哈希计算，避免大字符串内存占用 by AI
         """
         import hashlib
         
@@ -916,11 +918,14 @@ class PlexLibraryManager:
             # 排序文件路径以确保一致性
             sorted_paths = sorted(file_paths)
             
-            # 创建一个包含所有文件路径的字符串
-            paths_str = '\n'.join(sorted_paths).encode('utf-8')
+            # [MOD] 使用增量哈希计算，避免创建大字符串
+            hash_obj = hashlib.md5()
+            for path in sorted_paths:
+                # 逐个更新哈希，避免内存峰值
+                hash_obj.update(path.encode('utf-8'))
+                hash_obj.update(b'\n')  # 分隔符
             
-            # 计算MD5校验和
-            checksum = hashlib.md5(paths_str).hexdigest()
+            checksum = hash_obj.hexdigest()
             return checksum
         except Exception as e:
             logger.error(f"[PLEX更新] 计算文件列表校验和失败: {str(e)}")
@@ -933,20 +938,40 @@ class PlexLibraryManager:
             snapshot_file (str): 快照文件路径
             file_paths (list): 文件路径列表
             checksum (str): 文件列表的校验和
+            
+        [MOD] 2026-02-24 性能优化：流式写入大文件列表 by AI
         """
         try:
             # 确保目录存在
             os.makedirs(os.path.dirname(snapshot_file), exist_ok=True)
             
-            # 保存快照数据
-            snapshot_data = {
-                'timestamp': time.time(),
-                'checksum': checksum,
-                'files': file_paths
-            }
-            
-            with open(snapshot_file, 'w') as f:
-                json.dump(snapshot_data, f, indent=2)
+            # [MOD] 对于大文件列表，使用流式写入
+            if len(file_paths) > 10000:
+                logger.info(f"[PLEX更新] 大文件列表 ({len(file_paths)} 个)，使用流式写入")
+                import io
+                with open(snapshot_file, 'w', encoding='utf-8') as f:
+                    f.write('{\n')
+                    f.write(f'  "timestamp": {time.time()},\n')
+                    f.write(f'  "checksum": "{checksum}",\n')
+                    f.write('  "files": [\n')
+                    for i, path in enumerate(file_paths):
+                        # 转义 JSON 字符串中的特殊字符
+                        escaped_path = path.replace('\\', '\\\\').replace('"', '\\"')
+                        if i < len(file_paths) - 1:
+                            f.write(f'    "{escaped_path}",\n')
+                        else:
+                            f.write(f'    "{escaped_path}"\n')
+                    f.write('  ]\n')
+                    f.write('}\n')
+            else:
+                # 小文件列表直接使用 json.dump
+                snapshot_data = {
+                    'timestamp': time.time(),
+                    'checksum': checksum,
+                    'files': file_paths
+                }
+                with open(snapshot_file, 'w', encoding='utf-8') as f:
+                    json.dump(snapshot_data, f, indent=2)
             
             logger.info(f"[PLEX更新] 已保存文件列表快照: {snapshot_file}")
         except Exception as e:
