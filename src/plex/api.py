@@ -390,24 +390,24 @@ class PlexAPI:
             logger.error(f"Plex API 返回错误: {result.get('error')}")
             return []
         
-        # [MOD] 调试：记录 API 响应结构
+        # [MOD] 调试：记录 API 响应结构（使用 INFO 级别便于排查问题）
         if 'MediaContainer' in result:
             mc = result['MediaContainer']
-            logger.debug(f"Plex API 响应: MediaContainer 包含键: {list(mc.keys())}")
+            logger.info(f"Plex API 响应: MediaContainer 包含键: {list(mc.keys())}")
             if 'Metadata' in mc:
-                logger.debug(f"Metadata 数量: {len(mc['Metadata'])}")
+                logger.info(f"Metadata 数量: {len(mc['Metadata'])}")
                 if mc['Metadata']:
                     first_item = mc['Metadata'][0]
-                    logger.debug(f"第一个 Metadata 项的键: {list(first_item.keys())}")
-                    logger.debug(f"第一个 Metadata 项的 type: {first_item.get('type')}")
+                    logger.info(f"第一个 Metadata 项的键: {list(first_item.keys())}")
+                    logger.info(f"第一个 Metadata 项的 type: {first_item.get('type')}")
                     if 'Media' in first_item:
-                        logger.debug(f"第一个 Metadata 项包含 Media: {first_item['Media']}")
+                        logger.info(f"第一个 Metadata 项包含 Media: {first_item['Media']}")
                     else:
-                        logger.debug(f"第一个 Metadata 项不包含 Media 键")
+                        logger.info(f"第一个 Metadata 项不包含 Media 键")
             else:
-                logger.debug("MediaContainer 不包含 Metadata 键")
+                logger.info("MediaContainer 不包含 Metadata 键")
         else:
-            logger.debug(f"Plex API 响应不包含 MediaContainer: {list(result.keys())}")
+            logger.info(f"Plex API 响应不包含 MediaContainer: {list(result.keys())}")
         
         # 解析响应
         files = []

@@ -74,10 +74,12 @@ AUXILIARY_FILE_EXTENSIONS = {
 }
 
 # 定义辅助文件夹名称
+# [MOD] 2026-02-24 添加 .@__thumb (macOS BDMV 缩略图文件夹) by AI
 AUXILIARY_FOLDER_NAMES = {
     '.actors', '.extras', '.sample', '.samples',
     'extras', 'samples', 'subtitles', 'subs',
-    'metadata', 'posters', 'thumbs', 'covers'
+    'metadata', 'posters', 'thumbs', 'covers',
+    '.@__thumb'  # macOS BDMV 目录中的缩略图文件夹
 }
 
 # 日志配置
@@ -596,6 +598,11 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                             if items:
                                 for item in items:
                                     item_path = os.path.join(directory, item)
+                                    # [MOD] 2026-02-24 先检查是否为辅助文件夹，跳过不存在的虚拟目录 by AI
+                                    if is_auxiliary_folder(item_path):
+                                        logger.debug(f"跳过辅助文件夹: {item_path}")
+                                        continue
+                                    
                                     # 为WebDAV路径添加额外的文件/目录检查
                                     try:
                                         if os.path.isdir(item_path):
