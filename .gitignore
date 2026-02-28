@@ -48,6 +48,9 @@ cache/
 
 # Configuration files with sensitive information
 config.env
+# [MOD] 2026-02-28 添加部署相关敏感文件 by AI
+.deploy.conf
+sync_to_nas.sh
 config.env.local
 *.env
 !.env.example

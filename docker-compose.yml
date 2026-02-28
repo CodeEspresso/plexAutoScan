@@ -10,9 +10,10 @@ services:
       - ./data/cache:/data/cache
       - ./data/snapshots:/data/snapshots
       # 直接映射实际的云盘挂载路径到Docker容器内
-      - /vol02/CloudDrive/WebDAV:/vol02/CloudDrive/WebDAV:ro
+      # [MOD] 2026-02-28 添加shared传播属性，支持宿主机挂载变化同步到容器 by AI
+      - /vol02/CloudDrive/WebDAV:/vol02/CloudDrive/WebDAV:ro,shared
       # 挂载影音媒体目录（NFS挂载）
-      - /vol02/影音媒体:/vol02/影音媒体:ro
+      - /vol02/影音媒体:/vol02/影音媒体:ro,shared
       # 挂载环境调试脚本
       # 确保文件存在，避免Docker自动创建目录
       - ./debug_docker_env.sh:/debug_docker_env.sh:ro
@@ -27,7 +28,8 @@ services:
       # TEST_ENV由config.env文件设置，不再在此硬编码
       - LOCAL_PATH_PREFIX=/vol02/CloudDrive/WebDAV  # Docker容器内路径前缀
       - PROD_TARGET_PATH_PREFIX=/vol02/CloudDrive/WebDAV  # 生产环境目标路径前缀
-    command: ["sh", "-c", "mkdir -p /data/snapshots /data/logs /data/output && chmod -R 777 /data/snapshots && while true; do /venv/bin/python -m src.main; sleep 600; done"]
+    # [MOD] 2026-02-28 移除sleep，让程序退出后立即重启 by AI
+    command: ["sh", "-c", "mkdir -p /data/snapshots /data/logs /data/output && chmod -R 777 /data/snapshots && while true; do /venv/bin/python -m src.main; echo '程序退出，5秒后重启...'; sleep 5; done"]
     cap_add:
       - DAC_READ_SEARCH
       - SYS_ADMIN  # 增加系统管理员权限以更好地处理文件系统操作

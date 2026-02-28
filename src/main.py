@@ -208,41 +208,46 @@ class PlexAutoScan:
                 # 加载配置
                 self.logger.info("正在加载配置...")
                 
-                # 清理旧快照
-                self.logger.info("正在清理旧快照...")
-                self.snapshot_manager.clean_old_snapshots(
-                    max_age_days=self.config.get('SNAPSHOT_RETENTION_DAYS', 7),
-                    max_count=self.config.get('MAX_SNAPSHOTS', 10)
-                )
-                
-                # 更新媒体库缓存
-                if self.library_manager:
-                    self.logger.info("正在更新媒体库缓存...")
-                    self.library_manager.refresh_libraries()
+                # [MOD] 2026-02-28 扫描前检查挂载路径健康状态 by AI
+                if not self._check_mount_paths_health():
+                    # 挂载点不可用，跳过本次扫描，等待下一周期
+                    self.logger.warning("挂载点不可用，跳过本次扫描，等待下一周期...")
                 else:
-                    self.logger.warning("媒体库管理器不可用，跳过媒体库缓存更新")
-                
-                # 获取需要处理的目录列表
-                directories = self._get_directories_to_process()
-                
-                if not directories:
-                    self.logger.warning("没有找到需要处理的目录")
-                else:
-                    self.logger.info(f"找到{len(directories)}个需要处理的目录")
+                    # 清理旧快照
+                    self.logger.info("正在清理旧快照...")
+                    self.snapshot_manager.clean_old_snapshots(
+                        max_age_days=self.config.get('SNAPSHOT_RETENTION_DAYS', 7),
+                        max_count=self.config.get('MAX_SNAPSHOTS', 10)
+                    )
                     
-                    # 处理目录
-                    self._process_directories(directories)
-                
-                # 计算本次周期耗时
-                cycle_elapsed = time.time() - cycle_start_time
-                
-                # 打印本次周期统计
-                self.logger.info(f"=== 第 {cycle_count} 次扫描周期统计 ===")
-                self.logger.info(f"成功处理: {self.success_count}")
-                self.logger.info(f"处理失败: {self.failure_count}")
-                self.logger.info(f"已跳过: {self.skipped_count}")
-                self.logger.info(f"跳过的目录: {len(self.skipped_directories)}")
-                self.logger.info(f"本次耗时: {cycle_elapsed:.2f}秒")
+                    # 更新媒体库缓存
+                    if self.library_manager:
+                        self.logger.info("正在更新媒体库缓存...")
+                        self.library_manager.refresh_libraries()
+                    else:
+                        self.logger.warning("媒体库管理器不可用，跳过媒体库缓存更新")
+                    
+                    # 获取需要处理的目录列表
+                    directories = self._get_directories_to_process()
+                    
+                    if not directories:
+                        self.logger.warning("没有找到需要处理的目录")
+                    else:
+                        self.logger.info(f"找到{len(directories)}个需要处理的目录")
+                        
+                        # 处理目录
+                        self._process_directories(directories)
+                    
+                    # 计算本次周期耗时
+                    cycle_elapsed = time.time() - cycle_start_time
+                    
+                    # 打印本次周期统计
+                    self.logger.info(f"=== 第 {cycle_count} 次扫描周期统计 ===")
+                    self.logger.info(f"成功处理: {self.success_count}")
+                    self.logger.info(f"处理失败: {self.failure_count}")
+                    self.logger.info(f"已跳过: {self.skipped_count}")
+                    self.logger.info(f"跳过的目录: {len(self.skipped_directories)}")
+                    self.logger.info(f"本次耗时: {cycle_elapsed:.2f}秒")
                 
             except Exception as e:
                 self.logger.error(f"扫描周期出错: {str(e)}")
@@ -341,6 +346,105 @@ class PlexAutoScan:
         except Exception as e:
             self.logger.error(f"进入修复模式时出错: {str(e)}")
             return False
+    
+    def _check_mount_paths_health(self):
+        """检查挂载路径健康状态，如失效则自动重启容器
+        
+        Returns:
+            bool: True表示健康检查通过，False表示需要重启
+        """
+        # 只在Docker环境下执行此检查
+        if not self.config.is_docker:
+            return True
+        
+        # 获取所有挂载路径
+        mount_paths = self.config.get_mount_paths()
+        if not mount_paths:
+            return True
+        
+        # [MOD] 2026-02-28 添加健康检查开始日志 by AI
+        self.logger.info("=== 开始挂载点健康检查 ===")
+        
+        # [MOD] 2026-02-28 添加退避机制，防止频繁重启 by AI
+        backoff_file = '/tmp/mount_check_failure.count'
+        try:
+            if os.path.exists(backoff_file):
+                with open(backoff_file, 'r') as f:
+                    failure_count = int(f.read().strip())
+            else:
+                failure_count = 0
+        except Exception:
+            failure_count = 0
+        
+        # 检测常见的基础挂载点
+        base_mount_points = set()
+        for path in mount_paths:
+            if path.startswith('/vol02/CloudDrive/WebDAV'):
+                base_mount_points.add('/vol02/CloudDrive/WebDAV')
+            elif path.startswith('/vol01/CloudDrive/WebDAV'):
+                base_mount_points.add('/vol01/CloudDrive/WebDAV')
+            elif path.startswith('/vol02/影音媒体'):
+                base_mount_points.add('/vol02/影音媒体')
+        
+        self.logger.info(f"检测到 {len(base_mount_points)} 个基础挂载点需要检查")
+        
+        # 检查每个基础挂载点
+        unhealthy_count = 0
+        for base_path in base_mount_points:
+            if not os.path.exists(base_path):
+                self.logger.warning(f"基础挂载点不存在: {base_path}")
+                unhealthy_count += 1
+                continue
+            
+            # [MOD] 2026-02-28 添加超时保护，防止fuse假死导致程序卡住 by AI
+            def _list_dir_with_timeout(path):
+                return os.listdir(path)
+            
+            try:
+                test_files = run_with_timeout(
+                    _list_dir_with_timeout,
+                    base_path,
+                    timeout_seconds=10,
+                    default=None,
+                    error_message=f"检查挂载点超时: {base_path}"
+                )
+                
+                if test_files is None:
+                    self.logger.warning(f"挂载点检查超时（可能fuse假死）: {base_path}")
+                    unhealthy_count += 1
+                elif len(test_files) == 0:
+                    self.logger.warning(f"挂载点为空目录（可能挂载失败）: {base_path}")
+                    unhealthy_count += 1
+                else:
+                    self.logger.info(f"挂载点健康: {base_path} (文件数: {len(test_files)})")
+            except Exception as e:
+                self.logger.warning(f"挂载点不可访问: {base_path}, 错误: {str(e)}")
+                unhealthy_count += 1
+        
+        # 如果有挂载点失效，触发重启
+        if unhealthy_count > 0:
+            failure_count += 1
+            # 保存失败次数
+            try:
+                with open(backoff_file, 'w') as f:
+                    f.write(str(failure_count))
+            except Exception:
+                pass
+            
+            # [MOD] 2026-02-28 退避机制：失败次数越多，等待越长 by AI
+            wait_seconds = min(5 * (2 ** min(failure_count - 1, 6)), 300)  # 最大5分钟
+            self.logger.error(f"检测到 {unhealthy_count} 个挂载点失效（第{failure_count}次），{wait_seconds}秒后退出...")
+            time.sleep(wait_seconds)
+            sys.exit(1)
+        
+        # 健康检查通过，重置失败计数
+        try:
+            if os.path.exists(backoff_file):
+                os.remove(backoff_file)
+        except Exception:
+            pass
+        
+        return True
     
     def _get_directories_to_process(self):
         """获取需要处理的目录列表
