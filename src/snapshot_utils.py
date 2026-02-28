@@ -110,6 +110,14 @@ def is_auxiliary_file(file_path):
     if file_ext in AUXILIARY_FILE_EXTENSIONS:
         return True
     
+    # [MOD] 2026-02-28 检查文件路径中是否包含辅助文件夹名称 by AI
+    for folder_name in AUXILIARY_FOLDER_NAMES:
+        # 使用路径分隔符统一处理
+        path_parts = file_path.replace('\\', '/').split('/')
+        for part in path_parts:
+            if part.lower() == folder_name.lower():
+                return True
+    
     # 检查文件名是否包含辅助文件标识
     auxiliary_keywords = ['poster', 'cover', 'fanart', 'discart', 'folder']
     for keyword in auxiliary_keywords:
@@ -473,6 +481,15 @@ def generate_snapshot(dir, output_file, scan_delay=1, max_files=0, skip_large=Fa
                         logger.debug(f"跳过辅助文件: {file_path}")
                         skipped_auxiliary += 1
                         return False
+                    
+                    # [MOD] 2026-02-28 检查软链接目标是否存在 by AI
+                    if os.path.islink(file_path):
+                        # 软链接：检查目标是否存在
+                        if not os.path.exists(file_path):
+                            # 软链接目标不存在，跳过但不报错
+                            logger.debug(f"软链接目标不存在: {file_path}")
+                            skipped_auxiliary += 1
+                            return False
                     
                     file_size = 0
                     # 尝试从预取缓存获取文件信息
